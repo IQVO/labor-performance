@@ -28,7 +28,7 @@ COVERAGE_THRESHOLD := 90
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build vet fmt fmt-check lint test coverage integration-kafka-testcontainers bdd arch-test mutation-fast mutation vuln api-lint check check-all
+.PHONY: help build vet fmt fmt-check lint test coverage integration-kafka-testcontainers bdd contract arch-test mutation-fast mutation vuln api-lint check check-all
 
 help:
 	@echo "labor-performance — local quality gate (targets mirror .github/workflows/ci.yml)"
@@ -43,6 +43,9 @@ help:
 	@echo "  coverage          CI coverage command + the $(COVERAGE_THRESHOLD)% gate"
 	@echo "  integration-kafka-testcontainers  Build-tagged Kafka consumer test with an isolated Testcontainers broker"
 	@echo "  bdd               godog/Gherkin acceptance tests"
+	@echo "  contract          scripts/contract-test.sh — Schemathesis vs apis/openapi.yaml"
+	@echo "                    (boots the service in-memory; needs st: pip install"
+	@echo "                     'schemathesis==4.28.0')"
 	@echo "  arch-test         Architecture fitness tests (internal/architecture/)"
 	@echo "  mutation-fast     Fast blocking mutation subset (internal/domain/performance)"
 	@echo "  mutation          Exhaustive mutation run over the whole domain layer (slow)"
@@ -98,6 +101,12 @@ integration-kafka-testcontainers:
 
 bdd:
 	$(GO) test ./... -run TestFeatures -v
+
+# Property-based contract tests against apis/openapi.yaml — mirrors the
+# `contract` CI job. Not part of check/check-all (needs Python tooling
+# installed); CI runs it as its own job on every push and PR.
+contract:
+	./scripts/contract-test.sh
 
 arch-test:
 	$(GO) test ./internal/architecture/... -v

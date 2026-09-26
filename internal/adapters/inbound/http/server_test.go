@@ -458,6 +458,28 @@ func TestGetTaskTypeUtilization(t *testing.T) {
 			t.Fatalf("problem.type = %q", p.Type)
 		}
 	})
+
+	// Schemathesis merges an operation's declared query parameters into a
+	// closed container (additionalProperties: false) and sends unknown
+	// query parameters expecting a 4xx — a constraint OpenAPI 3.0.3 cannot
+	// express for query containers. This service deliberately ignores
+	// unknown parameters, and this subtest pins that lenient contract for
+	// scripts/contract-test.sh, which excludes this operation because of
+	// that unexpressible assumption.
+	t.Run("success: unknown query parameters are ignored, not rejected", func(t *testing.T) {
+		e := newTestEnv(t, now)
+		rec := e.do(t, http.MethodGet, "/task-types/PICK/utilization?window=30m&debug=1&foo=bar", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+		}
+		var body utilizationBody
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.WindowSeconds != int64((30 * time.Minute).Seconds()) {
+			t.Fatalf("WindowSeconds = %d, want the requested 30m window (unknown params must not affect it)", body.WindowSeconds)
+		}
+	})
 }
 
 func TestGetAssociateUtilization(t *testing.T) {
@@ -498,6 +520,24 @@ func TestGetAssociateUtilization(t *testing.T) {
 		}
 		if body.Associates != 0 {
 			t.Fatalf("Associates = %d, want 0", body.Associates)
+		}
+	})
+
+	// Same lenient query contract as TestGetTaskTypeUtilization's unknown-
+	// parameters subtest: unknown query parameters are ignored, which
+	// scripts/contract-test.sh's exclusion of this operation relies on.
+	t.Run("success: unknown query parameters are ignored, not rejected", func(t *testing.T) {
+		e := newTestEnv(t, now)
+		rec := e.do(t, http.MethodGet, "/associates/assoc-1/utilization?window=30m&debug=1&foo=bar", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+		}
+		var body utilizationBody
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.WindowSeconds != int64((30 * time.Minute).Seconds()) {
+			t.Fatalf("WindowSeconds = %d, want the requested 30m window (unknown params must not affect it)", body.WindowSeconds)
 		}
 	})
 }
