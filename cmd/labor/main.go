@@ -21,6 +21,7 @@ import (
 	inboundhttp "github.com/claudioed/labor-performance/internal/adapters/inbound/http"
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	outboundkafka "github.com/claudioed/labor-performance/internal/adapters/outbound/kafka"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
@@ -309,11 +310,27 @@ func buildPersistence(ctx context.Context, databaseURL, migrationsPath string, l
 		}, nil
 	}
 
-	if err := postgres.RunMigrations(databaseURL, migrationsPath); err != nil {
+	// Retried: this fleet's Istio native sidecars reset EVERY pod's first
+	// outbound TCP dial ~10s after the app starts
+	// (holdApplicationUntilProxyStarts is a no-op for native sidecars). A
+	// single attempt turns that transient condition into CrashLoopBackOff;
+	// the retry still fails closed once its budget is exhausted.
+	if err := bootretry.Retry(ctx, logger, "run migrations", func() error {
+		return postgres.RunMigrations(databaseURL, migrationsPath)
+	}); err != nil {
 		return nil, err
 	}
 	pool, err := postgres.NewPool(ctx, databaseURL)
 	if err != nil {
+		return nil, err
+	}
+	// ParseConfig/NewWithConfig do not themselves establish a connection,
+	// so without this the first-dial reset would surface inside the first
+	// real request instead of at boot.
+	if err := bootretry.Retry(ctx, logger, "ping database", func() error {
+		return pool.Ping(ctx)
+	}); err != nil {
+		pool.Close()
 		return nil, err
 	}
 	return &persistence{
