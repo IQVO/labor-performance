@@ -1,0 +1,7 @@
+inventory-storage	check_availability
+inventory-storage	get_bin_occupancy
+inventory-storage	revoke_reservation
+labor-performance	get_associate_scorecard
+labor-performance	get_labor_standard
+labor-performance	get_task_type_performance
+labor-performance	get_task_type_utilization
