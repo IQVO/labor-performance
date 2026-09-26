@@ -71,6 +71,17 @@ spec:
           # handler with no separate /healthz route (unlike the OLTP REST
           # service and the reports reader), so the probes use a TCP socket
           # check on the port rather than an HTTP path.
+          # startupProbe covers this fleet's known ~10s post-start
+          # first-outbound-dial reset (Istio native sidecars); see
+          # values.yaml's startupProbe comment for the full rationale.
+          # tcpSocket, not httpGet, matching the liveness/readiness probes
+          # just below: this binary mounts the MCP Streamable HTTP handler
+          # directly with no separate /healthz route.
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
           livenessProbe:
             tcpSocket:
               port: http
