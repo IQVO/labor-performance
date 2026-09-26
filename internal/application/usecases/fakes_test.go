@@ -57,12 +57,18 @@ func (f *failingStandardRepo) NextID(ctx context.Context) (shared.StandardId, er
 }
 
 // failingPerformanceRepo wraps a real ports.PerformanceRepo and can be
-// told to fail Save or RecentByAssociateID, to exercise
-// RecordTaskPerformance's and GetAssociateScorecard's error paths.
+// told to fail Save, RecentByAssociateID, ExistsByAssociateID,
+// ScorecardFor, SumActualSecondsByTaskType or SumActualSecondsByAssociate,
+// to exercise RecordTaskPerformance's, GetAssociateScorecard's and
+// GetUtilization's error paths.
 type failingPerformanceRepo struct {
 	ports.PerformanceRepo
-	failSave   bool
-	failRecent bool
+	failSave         bool
+	failRecent       bool
+	failExists       bool
+	failScorecard    bool
+	failSumTaskType  bool
+	failSumAssociate bool
 }
 
 func (f *failingPerformanceRepo) Save(ctx context.Context, p *performance.TaskPerformance) error {
@@ -77,6 +83,34 @@ func (f *failingPerformanceRepo) RecentByAssociateID(ctx context.Context, associ
 		return nil, errUnmapped
 	}
 	return f.PerformanceRepo.RecentByAssociateID(ctx, associateId, limit)
+}
+
+func (f *failingPerformanceRepo) ExistsByAssociateID(ctx context.Context, associateId shared.AssociateId) (bool, error) {
+	if f.failExists {
+		return false, errUnmapped
+	}
+	return f.PerformanceRepo.ExistsByAssociateID(ctx, associateId)
+}
+
+func (f *failingPerformanceRepo) ScorecardFor(ctx context.Context, associateId shared.AssociateId) (ports.Scorecard, error) {
+	if f.failScorecard {
+		return ports.Scorecard{}, errUnmapped
+	}
+	return f.PerformanceRepo.ScorecardFor(ctx, associateId)
+}
+
+func (f *failingPerformanceRepo) SumActualSecondsByTaskType(ctx context.Context, taskType shared.TaskType, since time.Time) (int64, error) {
+	if f.failSumTaskType {
+		return 0, errUnmapped
+	}
+	return f.PerformanceRepo.SumActualSecondsByTaskType(ctx, taskType, since)
+}
+
+func (f *failingPerformanceRepo) SumActualSecondsByAssociate(ctx context.Context, associateId shared.AssociateId, since time.Time) (int64, error) {
+	if f.failSumAssociate {
+		return 0, errUnmapped
+	}
+	return f.PerformanceRepo.SumActualSecondsByAssociate(ctx, associateId, since)
 }
 
 // failingPublisher can be told to fail Publish, to exercise a use case's
@@ -123,11 +157,16 @@ func (f *fakeStandardMetrics) StandardDefinitionRejected(ctx context.Context) {
 }
 
 // failingIdlePeriodRepo wraps a real ports.IdlePeriodRepo and can be told
-// to fail Save, to exercise RecordTaskPerformance's idle-gap-save error
-// path.
+// to fail Save, SumByTaskType, SumByAssociate, LastEndedAtByAssociate or
+// DistinctAssociatesByTaskType, to exercise RecordTaskPerformance's and
+// GetUtilization's error paths.
 type failingIdlePeriodRepo struct {
 	ports.IdlePeriodRepo
-	failSave bool
+	failSave          bool
+	failSumTaskType   bool
+	failSumAssociate  bool
+	failLastEndedAt   bool
+	failDistinctAssoc bool
 }
 
 func (f *failingIdlePeriodRepo) Save(ctx context.Context, p *idleness.IdlePeriod) error {
@@ -135,4 +174,32 @@ func (f *failingIdlePeriodRepo) Save(ctx context.Context, p *idleness.IdlePeriod
 		return errUnmapped
 	}
 	return f.IdlePeriodRepo.Save(ctx, p)
+}
+
+func (f *failingIdlePeriodRepo) SumByTaskType(ctx context.Context, taskType shared.TaskType, since time.Time) (int64, int, error) {
+	if f.failSumTaskType {
+		return 0, 0, errUnmapped
+	}
+	return f.IdlePeriodRepo.SumByTaskType(ctx, taskType, since)
+}
+
+func (f *failingIdlePeriodRepo) SumByAssociate(ctx context.Context, associateId shared.AssociateId, since time.Time) (int64, int, error) {
+	if f.failSumAssociate {
+		return 0, 0, errUnmapped
+	}
+	return f.IdlePeriodRepo.SumByAssociate(ctx, associateId, since)
+}
+
+func (f *failingIdlePeriodRepo) LastEndedAtByAssociate(ctx context.Context, associateId shared.AssociateId) (time.Time, error) {
+	if f.failLastEndedAt {
+		return time.Time{}, errUnmapped
+	}
+	return f.IdlePeriodRepo.LastEndedAtByAssociate(ctx, associateId)
+}
+
+func (f *failingIdlePeriodRepo) DistinctAssociatesByTaskType(ctx context.Context, taskType shared.TaskType, since time.Time) (int, error) {
+	if f.failDistinctAssoc {
+		return 0, errUnmapped
+	}
+	return f.IdlePeriodRepo.DistinctAssociatesByTaskType(ctx, taskType, since)
 }
