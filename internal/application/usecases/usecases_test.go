@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
+	"github.com/claudioed/labor-performance/internal/domain/idleness"
 	"github.com/claudioed/labor-performance/internal/domain/performance"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 	"github.com/claudioed/labor-performance/internal/domain/standard"
@@ -1152,5 +1155,472 @@ func TestGetUtilization_DefaultsWindowWhenNonPositive(t *testing.T) {
 	}
 	if result.WindowSeconds != int64((time.Hour).Seconds()) {
 		t.Fatalf("WindowSeconds = %d, want the 1h default", result.WindowSeconds)
+	}
+}
+
+// TestGetUtilization_NilClock_FallsBackToWallClock proves a GetUtilization
+// constructed without a Clock is a valid configuration (mirroring every
+// other optional dependency in this layer): the read must fall back to the
+// wall clock, not panic — the nil-Clock branch of now().
+func TestGetUtilization_NilClock_FallsBackToWallClock(t *testing.T) {
+	f := newFixture(baseTime)
+	uc := &usecases.GetUtilization{Performances: f.performances, IdlePeriods: f.idlePeriods}
+	ctx := context.Background()
+
+	byType, err := uc.ForTaskType(ctx, shared.Pick, time.Hour)
+	if err != nil {
+		t.Fatalf("ForTaskType with nil Clock: %v", err)
+	}
+	if byType.TaskSeconds != 0 || byType.IdleSeconds != 0 || byType.UtilizationPct != nil {
+		t.Fatalf("unexpected non-zero result with empty repos: %+v", byType)
+	}
+
+	byAssoc, err := uc.ForAssociate(ctx, "assoc-1", time.Hour)
+	if err != nil {
+		t.Fatalf("ForAssociate with nil Clock: %v", err)
+	}
+	if byAssoc.OpenGapSeconds != 0 || byAssoc.Associates != 0 || byAssoc.UtilizationPct != nil {
+		t.Fatalf("unexpected non-zero result with empty repos: %+v", byAssoc)
+	}
+}
+
+// TestGetUtilization_ForTaskType_PropagatesRepoErrors rounds out
+// ForTaskType's three infrastructure-failure paths — one per repo call —
+// none of which the happy-path in-memory adapters produce on their own.
+func TestGetUtilization_ForTaskType_PropagatesRepoErrors(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	cases := []struct {
+		name         string
+		performances ports.PerformanceRepo
+		idlePeriods  ports.IdlePeriodRepo
+	}{
+		{
+			name:         "SumActualSecondsByTaskType failure",
+			performances: &failingPerformanceRepo{PerformanceRepo: f.performances, failSumTaskType: true},
+			idlePeriods:  f.idlePeriods,
+		},
+		{
+			name:         "SumByTaskType failure",
+			performances: f.performances,
+			idlePeriods:  &failingIdlePeriodRepo{IdlePeriodRepo: f.idlePeriods, failSumTaskType: true},
+		},
+		{
+			name:         "DistinctAssociatesByTaskType failure",
+			performances: f.performances,
+			idlePeriods:  &failingIdlePeriodRepo{IdlePeriodRepo: f.idlePeriods, failDistinctAssoc: true},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uc := &usecases.GetUtilization{Performances: tc.performances, IdlePeriods: tc.idlePeriods, Clock: f.clock}
+			if _, err := uc.ForTaskType(ctx, shared.Pick, time.Hour); !errors.Is(err, errUnmapped) {
+				t.Fatalf("error = %v, want errUnmapped", err)
+			}
+		})
+	}
+}
+
+// TestGetUtilization_ForAssociate_PropagatesRepoErrors rounds out
+// ForAssociate's four infrastructure-failure paths — one per repo call.
+func TestGetUtilization_ForAssociate_PropagatesRepoErrors(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	cases := []struct {
+		name         string
+		performances ports.PerformanceRepo
+		idlePeriods  ports.IdlePeriodRepo
+	}{
+		{
+			name:         "SumActualSecondsByAssociate failure",
+			performances: &failingPerformanceRepo{PerformanceRepo: f.performances, failSumAssociate: true},
+			idlePeriods:  f.idlePeriods,
+		},
+		{
+			name:         "SumByAssociate failure",
+			performances: f.performances,
+			idlePeriods:  &failingIdlePeriodRepo{IdlePeriodRepo: f.idlePeriods, failSumAssociate: true},
+		},
+		{
+			name:         "RecentByAssociateID failure",
+			performances: &failingPerformanceRepo{PerformanceRepo: f.performances, failRecent: true},
+			idlePeriods:  f.idlePeriods,
+		},
+		{
+			name:         "LastEndedAtByAssociate failure",
+			performances: f.performances,
+			idlePeriods:  &failingIdlePeriodRepo{IdlePeriodRepo: f.idlePeriods, failLastEndedAt: true},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uc := &usecases.GetUtilization{Performances: tc.performances, IdlePeriods: tc.idlePeriods, Clock: f.clock}
+			if _, err := uc.ForAssociate(ctx, "assoc-1", time.Hour); !errors.Is(err, errUnmapped) {
+				t.Fatalf("error = %v, want errUnmapped", err)
+			}
+		})
+	}
+}
+
+// TestGetUtilization_ForTaskType_TaskWindow_LowerBoundInclusive pins the
+// window's lower boundary through the real write and read paths: a
+// completion falling EXACTLY on the window start (now - window) is
+// counted, one a second earlier is excluded. Each row is its associate's
+// first-ever completion so no idle gap muddies the task-time assertion.
+func TestGetUtilization_ForTaskType_TaskWindow_LowerBoundInclusive(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	readAt := baseTime.Add(2 * time.Hour)
+	since := baseTime.Add(time.Hour)
+
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-old", TaskId: "task-old", AssociateId: "assoc-old", TaskType: shared.Pick,
+		ActualSeconds: 100, CompletedAt: since.Add(-1 * time.Second),
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(old): %v", err)
+	}
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-edge", TaskId: "task-edge", AssociateId: "assoc-edge", TaskType: shared.Pick,
+		ActualSeconds: 30, CompletedAt: since,
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(edge): %v", err)
+	}
+
+	f2 := newFixtureAt(f, readAt)
+	result, err := f2.getUtilization.ForTaskType(ctx, shared.Pick, time.Hour)
+	if err != nil {
+		t.Fatalf("ForTaskType: %v", err)
+	}
+	if result.TaskSeconds != 30 {
+		t.Fatalf("TaskSeconds = %d, want 30 (only the completion exactly at the window start counts)", result.TaskSeconds)
+	}
+	if result.IdleSeconds != 0 {
+		t.Fatalf("IdleSeconds = %d, want 0 (no gaps: both rows were first completions)", result.IdleSeconds)
+	}
+	if result.UtilizationPct == nil || *result.UtilizationPct != 100.0 {
+		t.Fatalf("UtilizationPct = %v, want 100 (task time only)", result.UtilizationPct)
+	}
+}
+
+// TestGetUtilization_ForTaskType_IdleWindow_LowerBoundInclusive pins the
+// idle-side window boundary: a closed idle gap whose EndedAt falls EXACTLY
+// on the window start is counted, one ending a second earlier is excluded
+// — mirroring the task side's inclusive lower bound.
+func TestGetUtilization_ForTaskType_IdleWindow_LowerBoundInclusive(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	readAt := baseTime.Add(2 * time.Hour)
+	since := baseTime.Add(time.Hour)
+
+	// assoc-1: gap [baseTime, since) — ends EXACTLY on the boundary.
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1a", TaskId: "task-1a", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(1a): %v", err)
+	}
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1b", TaskId: "task-1b", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 30, CompletedAt: since.Add(30 * time.Second),
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(1b): %v", err)
+	}
+
+	// assoc-2: gap [baseTime, since-1s) — ends one second BEFORE the
+	// boundary, so its 3599s must be excluded from the window sum.
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2a", TaskId: "task-2a", AssociateId: "assoc-2", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(2a): %v", err)
+	}
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2b", TaskId: "task-2b", AssociateId: "assoc-2", TaskType: shared.Pick,
+		ActualSeconds: 30, CompletedAt: since.Add(29 * time.Second),
+	}); err != nil {
+		t.Fatalf("RecordTaskPerformance(2b): %v", err)
+	}
+
+	f2 := newFixtureAt(f, readAt)
+	result, err := f2.getUtilization.ForTaskType(ctx, shared.Pick, time.Hour)
+	if err != nil {
+		t.Fatalf("ForTaskType: %v", err)
+	}
+	if result.IdleSeconds != 3600 {
+		t.Fatalf("IdleSeconds = %d, want 3600 (only the gap ending exactly at the window start counts)", result.IdleSeconds)
+	}
+	if result.TaskSeconds != 60 {
+		t.Fatalf("TaskSeconds = %d, want 60 (both boundary-side completions are in the window)", result.TaskSeconds)
+	}
+	if result.Associates != 1 {
+		t.Fatalf("Associates = %d, want 1 (only assoc-1 has an idle gap inside the window)", result.Associates)
+	}
+}
+
+// TestGetUtilization_ForAssociate_NeverObserved_AllZeroAndNilPct covers
+// the open-gap computation's zero-time branch: an associate this service
+// has never recorded anything for contributes NO open gap (no fabricated
+// "idle since forever"), no associates count, and a nil — never 0 —
+// utilization percentage.
+func TestGetUtilization_ForAssociate_NeverObserved_AllZeroAndNilPct(t *testing.T) {
+	f := newFixture(baseTime)
+	result, err := f.getUtilization.ForAssociate(context.Background(), "assoc-never-seen", time.Hour)
+	if err != nil {
+		t.Fatalf("ForAssociate: %v", err)
+	}
+	if result.TaskSeconds != 0 || result.IdleSeconds != 0 || result.OpenGapSeconds != 0 {
+		t.Fatalf("unexpected non-zero result for a never-observed associate: %+v", result)
+	}
+	if result.Associates != 0 {
+		t.Fatalf("Associates = %d, want 0 for a never-observed associate", result.Associates)
+	}
+	if result.UtilizationPct != nil {
+		t.Fatalf("UtilizationPct = %v, want nil (nothing was observed — never a fabricated number)", *result.UtilizationPct)
+	}
+}
+
+// TestGetUtilization_ForAssociate_OpenGap_ClampedAtWindowStart proves the
+// open gap can never exceed the window: an associate whose last activity
+// predates the window start contributes exactly one window's worth of
+// open-gap seconds, not the full time since their last activity. With no
+// task time in the window either, utilization is a real measured 0.0% —
+// not nil, because there IS a full window of idle time to share out.
+func TestGetUtilization_ForAssociate_OpenGap_ClampedAtWindowStart(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// Read 2h later over a 1h window: the last activity (baseTime) is a
+	// full hour before the window start, so the open gap clamps to
+	// exactly the window length.
+	f2 := newFixtureAt(f, baseTime.Add(2*time.Hour))
+	result, err := f2.getUtilization.ForAssociate(ctx, "assoc-1", time.Hour)
+	if err != nil {
+		t.Fatalf("ForAssociate: %v", err)
+	}
+	if result.OpenGapSeconds != 3600 {
+		t.Fatalf("OpenGapSeconds = %d, want 3600 (clamped to the window, never more)", result.OpenGapSeconds)
+	}
+	if result.TaskSeconds != 0 {
+		t.Fatalf("TaskSeconds = %d, want 0 (the only completion predates the window)", result.TaskSeconds)
+	}
+	if result.Associates != 1 {
+		t.Fatalf("Associates = %d, want 1 (the open gap alone marks the associate as observed)", result.Associates)
+	}
+	if result.UtilizationPct == nil || *result.UtilizationPct != 0 {
+		t.Fatalf("UtilizationPct = %v, want a real measured 0.0 (idle for the whole window)", result.UtilizationPct)
+	}
+}
+
+// TestGetUtilization_ForAssociate_OpenGap_MeasuredFromMostRecentIdleEnd
+// pins lastActivity's "whichever is more recent" contract: when the last
+// recorded idle-gap end is NEWER than the last completion, the open gap
+// runs from the gap end, not the older completion. This repo state is not
+// producible by the current write path (a recorded gap's EndedAt always
+// precedes the completion that recorded it) — it is seeded directly, the
+// way a backfill or a future write-path change could.
+func TestGetUtilization_ForAssociate_OpenGap_MeasuredFromMostRecentIdleEnd(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if err := f.idlePeriods.Save(ctx, idleness.Rehydrate(
+		"assoc-1", shared.Pick, baseTime, baseTime.Add(60*time.Second), 60, false,
+	)); err != nil {
+		t.Fatalf("seed idle period: %v", err)
+	}
+
+	f2 := newFixtureAt(f, baseTime.Add(150*time.Second))
+	result, err := f2.getUtilization.ForAssociate(ctx, "assoc-1", time.Hour)
+	if err != nil {
+		t.Fatalf("ForAssociate: %v", err)
+	}
+	if result.OpenGapSeconds != 90 {
+		t.Fatalf("OpenGapSeconds = %d, want 90 (150s since read minus the 60s-newer idle-gap end, not 150 from the older completion)", result.OpenGapSeconds)
+	}
+	if result.IdleSeconds != 60 {
+		t.Fatalf("IdleSeconds = %d, want 60 (the seeded closed gap still sums)", result.IdleSeconds)
+	}
+	if result.TaskSeconds != 40 {
+		t.Fatalf("TaskSeconds = %d, want 40", result.TaskSeconds)
+	}
+}
+
+// TestGetUtilization_ForAssociate_FutureLastActivity_ContributesNoOpenGap
+// covers the open-gap floor: a last-known activity instant in the FUTURE
+// (clock skew between the writer that recorded it and this reader)
+// contributes zero open-gap seconds — floored, never negative.
+func TestGetUtilization_ForAssociate_FutureLastActivity_ContributesNoOpenGap(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// A recorded idle-gap end 10 minutes in the future of the read time.
+	if err := f.idlePeriods.Save(ctx, idleness.Rehydrate(
+		"assoc-1", shared.Pick, baseTime.Add(9*time.Minute), baseTime.Add(10*time.Minute), 60, false,
+	)); err != nil {
+		t.Fatalf("seed idle period: %v", err)
+	}
+
+	f2 := newFixtureAt(f, baseTime.Add(5*time.Minute))
+	result, err := f2.getUtilization.ForAssociate(ctx, "assoc-1", time.Hour)
+	if err != nil {
+		t.Fatalf("ForAssociate: %v", err)
+	}
+	if result.OpenGapSeconds != 0 {
+		t.Fatalf("OpenGapSeconds = %d, want 0 (a future last activity is floored at zero, never negative)", result.OpenGapSeconds)
+	}
+	if result.UtilizationPct == nil || *result.UtilizationPct != 40 {
+		t.Fatalf("UtilizationPct = %v, want 40 (100*40/(40+60): task time plus the closed gap only)", result.UtilizationPct)
+	}
+}
+
+// --- Error propagation (scorecard existence/projection) -------------------
+
+// TestGetAssociateScorecard_PropagatesExistsError covers the
+// ExistsByAssociateID infrastructure-failure path.
+func TestGetAssociateScorecard_PropagatesExistsError(t *testing.T) {
+	f := newFixture(baseTime)
+	wrapped := &failingPerformanceRepo{PerformanceRepo: f.performances, failExists: true}
+	uc := &usecases.GetAssociateScorecard{Performances: wrapped}
+	if _, err := uc.Execute(context.Background(), "assoc-1"); !errors.Is(err, errUnmapped) {
+		t.Fatalf("error = %v, want errUnmapped", err)
+	}
+}
+
+// TestGetAssociateScorecard_PropagatesScorecardForError covers the
+// ScorecardFor infrastructure-failure path — reachable only once the
+// associate is known to exist.
+func TestGetAssociateScorecard_PropagatesScorecardForError(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	wrapped := &failingPerformanceRepo{PerformanceRepo: f.performances, failScorecard: true}
+	uc := &usecases.GetAssociateScorecard{Performances: wrapped}
+	if _, err := uc.Execute(ctx, "assoc-1"); !errors.Is(err, errUnmapped) {
+		t.Fatalf("error = %v, want errUnmapped", err)
+	}
+}
+
+// TestRecordTaskPerformance_IdleGap_PropagatesPreviousCompletionLookupError
+// covers previousCompletionFor's error path, reachable only when
+// idle-period recording is wired AND the associate is non-empty — the
+// failing RecentByAssociateID call that resolves the gap's start boundary.
+func TestRecordTaskPerformance_IdleGap_PropagatesPreviousCompletionLookupError(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+
+	wrapped := &failingPerformanceRepo{PerformanceRepo: f.performances, failRecent: true}
+	uc := &usecases.RecordTaskPerformance{
+		Performances: wrapped, Standards: f.standards, Processed: f.processed, Events: events.NewLogPublisher(nil), Clock: f.clock,
+		IdlePeriods: f.idlePeriods,
+	}
+	_, err := uc.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime.Add(time.Hour),
+	})
+	if !errors.Is(err, errUnmapped) {
+		t.Fatalf("error = %v, want errUnmapped", err)
+	}
+}
+
+// TestRecordTaskPerformance_IdleGap_NegativeGapLoggedWithLoggerWired
+// re-runs the out-of-order-delivery scenario with a Logger wired, proving
+// the skip-and-log discipline emits its structured warning without
+// failing the enclosing performance write.
+func TestRecordTaskPerformance_IdleGap_NegativeGapLoggedWithLoggerWired(t *testing.T) {
+	standards := memory.NewStandardRepo()
+	performances := memory.NewPerformanceRepo()
+	processed := memory.NewProcessedEventRepo()
+	idlePeriods := memory.NewIdlePeriodRepo()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	uc := &usecases.RecordTaskPerformance{
+		Performances: performances, Standards: standards, Processed: processed, Events: events.NewLogPublisher(nil),
+		Clock: memory.FixedClock{At: baseTime}, IdlePeriods: idlePeriods, Logger: logger,
+	}
+	ctx := context.Background()
+
+	if _, err := uc.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+
+	// Claim instant (completedAt - actualSeconds) lands strictly BEFORE
+	// the previous completion — out-of-order Kafka delivery.
+	p, err := uc.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 7200, CompletedAt: baseTime.Add(time.Hour).Add(30 * time.Minute),
+	})
+	if err != nil || p == nil {
+		t.Fatalf("second Execute must still succeed (p=%v, err=%v)", p, err)
+	}
+
+	_, count, err := idlePeriods.SumByAssociate(ctx, "assoc-1", baseTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("SumByAssociate: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("count = %d, want 0 (a negative gap must be skipped, not recorded)", count)
+	}
+}
+
+// TestRecordTaskPerformance_IdleGap_ZeroLengthGapSkipped pins the
+// zero-length boundary of the same rule: a claim instant landing EXACTLY
+// on the previous completion (a zero-length gap) is skipped like a
+// negative one — idleness.New requires a strictly positive gap.
+func TestRecordTaskPerformance_IdleGap_ZeroLengthGapSkipped(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+
+	firstCompletedAt := baseTime.Add(40 * time.Second)
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: firstCompletedAt,
+	}); err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
+
+	// claimedAt = completedAt - actualSeconds = firstCompletedAt exactly.
+	p, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 30, CompletedAt: firstCompletedAt.Add(30 * time.Second),
+	})
+	if err != nil || p == nil {
+		t.Fatalf("second Execute must still succeed over a zero-length gap (p=%v, err=%v)", p, err)
+	}
+
+	_, count, err := f.idlePeriods.SumByAssociate(ctx, "assoc-1", baseTime.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("SumByAssociate: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("count = %d, want 0 (a zero-length gap must be skipped, not recorded)", count)
 	}
 }

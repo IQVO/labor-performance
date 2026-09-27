@@ -286,7 +286,7 @@ Six endpoints plus a liveness probe. The full contract, including the RFC
 
 | Method | Path | Use case |
 | --- | --- | --- |
-| `POST` | `/standards` | DefineStandard (optional `travelComponentSeconds`, ADR 0015) |
+| `POST` | `/standards` | DefineStandard (optional `travelComponentSeconds`, ADR 0015). Requires an `Idempotency-Key` header — this is the service's one true resource-creation endpoint; see ADR 0016. |
 | `GET` | `/standards/{taskType}` | GetStandard |
 | `GET` | `/associates/{associateId}/scorecard` | GetAssociateScorecard |
 | `GET` | `/task-types/{taskType}/performance` | GetTaskTypePerformance |
@@ -330,16 +330,20 @@ curl -s localhost:8080/healthz
 ```bash
 curl -s -X POST localhost:8080/standards \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 3f9c1e4a-...' \
   -d '{"taskType":"PICK","expectedSeconds":45}'
 # 201 Created
 # {"taskType":"PICK","expectedSeconds":45,"effectiveFrom":"2026-08-29T12:00:00Z"}
 ```
 
-Revising it closes the prior record and starts a new one:
+Revising it closes the prior record and starts a new one (a fresh
+`Idempotency-Key` is required — reusing the one above would replay the
+first call's cached 201, not define a revision):
 
 ```bash
 curl -s -X POST localhost:8080/standards \
   -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 7a2d5b8c-...' \
   -d '{"taskType":"PICK","expectedSeconds":40}'
 # 201 Created
 # {"taskType":"PICK","expectedSeconds":40,"effectiveFrom":"2026-08-30T09:00:00Z"}
