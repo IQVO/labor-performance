@@ -1,0 +1,4 @@
+get_associate_scorecard	true	false
+get_labor_standard	true	false
+get_task_type_performance	true	false
+get_task_type_utilization	true	false
