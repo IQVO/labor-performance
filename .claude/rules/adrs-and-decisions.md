@@ -1,4 +1,4 @@
-# ADR index (0001–0015)
+# ADR index (0001–0017)
 
 Full records live in `docs/docs/adr/` (Nygard format, Docusaurus-rendered
 at `/docs/adr`). This is a summary index — read the actual ADR before
@@ -21,6 +21,8 @@ relying on a detail not captured here.
 | 0013 | Labor performance publishes an integration event | Accepted | `TaskPerformanceRecorded` also goes to the integration topic `warehouse.labor-performance.events` (via the same outbox), consumed by `workforce-management`. The analytics topic stays internal. |
 | 0014 | Measuring idleness and utilization | Accepted | `IdlePeriod` aggregate derived from consecutive `TaskCompleted` events (`IDLE_GAP_CAP_SECONDS`), additive `idle_seconds_before` on `TaskPerformanceRecorded`, the two `/utilization` endpoints and the `get_task_type_utilization` MCP tool. |
 | 0015 | Optional travel-time component on a LaborStandard | Accepted | Caller-supplied `TravelComponentSeconds` (`0 <= t <= ExpectedSeconds`); this service never calls facility-layout or any sibling to compute or validate it. |
+| 0016 | Transactional Idempotency-Key middleware for POST /standards | Accepted | Route-scoped, transactional Idempotency-Key HTTP middleware for `POST /standards`, this service's one true resource-creation endpoint; reuses the outbox's tx-in-context mechanism (`internal/pgtx`). Ported from order-management's reference (PR #105, ADR 0023). |
+| 0017 | Kafka consumer dead-letter queue and graceful shutdown hardening | Accepted | `Consumer.handleMessage` retries `handleFulfillmentEvent` in-process (cenkalti/backoff/v4, up to 3 attempts) then dead-letters an exhausted/poisoned message to `warehouse.fulfillment.events.dlq`, committing the offset so one poison message never blocks the partition. Graceful shutdown gains a readiness-flip-first sequence backing a new `GET /readyz` distinct from `GET /healthz`. Ported from order-management's DLQ/shutdown design (PR #107, ADR 0025) — this service has no sibling-context outbound calls, so no circuit breaker work applies here. |
 
 ## Reading order for a newcomer
 
@@ -35,6 +37,10 @@ relying on a detail not captured here.
 6. 0013 → 0014 (the integration topic, then the idleness field it carries)
    and 0015 (how the no-outbound-call boundary held when facility-layout
    distance data looked tempting).
+7. 0016 (idempotency-key middleware) → 0017 (Kafka DLQ and graceful
+   shutdown) — both are fleet-wide production-readiness ports from
+   order-management's reference implementations, read independently of
+   the rest.
 
 ## Proposing a new ADR
 

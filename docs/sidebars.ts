@@ -51,6 +51,8 @@ const sidebars: SidebarsConfig = {
         'adr/0013-labor-performance-integration-events',
         'adr/0014-labor-utilization-idleness',
         'adr/0015-optional-travel-component-on-labor-standard',
+        'adr/0016-idempotency-key-middleware',
+        'adr/0017-kafka-dlq-and-graceful-shutdown',
       ],
     },
   ],

@@ -107,6 +107,15 @@ func run() error {
 		Clock:        clock,
 	}
 
+	// readiness gates GET /readyz (ADR-0017 §graceful shutdown,
+	// mirroring order-management's ADR-0025 exactly). The zero value
+	// is ready; SetNotReady is called as the FIRST step of the
+	// shutdown sequence below, before the HTTP server itself stops
+	// accepting connections, so a Kubernetes readinessProbe has a
+	// chance to observe the flip and stop routing new traffic during
+	// the drain window that follows.
+	readiness := &inboundhttp.Readiness{}
+
 	server := &inboundhttp.Server{
 		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, UnitOfWork: persistence.uow, Metrics: standardMetrics},
 		GetStandard:            &usecases.GetStandard{Standards: standards},
@@ -118,6 +127,10 @@ func run() error {
 		// comment and RequireIdempotencyKey's nil-pool convention in
 		// server.go.
 		IdempotencyPool: persistence.pool,
+		// readiness backs GET /readyz (ADR-0017 §graceful shutdown):
+		// flipped to not-ready as the FIRST step of shutdown, below,
+		// before anything else stops.
+		Readiness: readiness,
 	}
 
 	httpServer := &http.Server{
@@ -137,6 +150,14 @@ func run() error {
 
 	consumerCtx, cancelConsumer := context.WithCancel(ctx)
 	defer cancelConsumer()
+	// consumerDone closes once the Kafka consumer's Run goroutine has
+	// actually returned -- including having committed the offset for
+	// whatever message it was mid-handling when cancelConsumer was
+	// called (see handleMessage's own commit-before-return shape) --
+	// so graceful shutdown can wait for a REAL stop, not just
+	// fire-and-forget the cancel (ADR-0017 §graceful shutdown,
+	// mirroring order-management's ADR-0025 exactly).
+	consumerDone := make(chan struct{})
 
 	errCh := make(chan error, 3)
 	go func() {
@@ -146,6 +167,7 @@ func run() error {
 		}
 	}()
 	go func() {
+		defer close(consumerDone)
 		logger.Info("kafka consumer starting", "brokers", kafkaBrokers, "group_id", kafkaGroupID, "topic", "warehouse.fulfillment.events")
 		if err := consumer.Run(consumerCtx); err != nil {
 			errCh <- err
@@ -180,10 +202,39 @@ func run() error {
 	case <-stopCtx.Done():
 	}
 
-	cancelConsumer()
+	// Graceful shutdown (ADR-0017 §graceful shutdown, mirroring
+	// order-management's ADR-0025 sequencing exactly), in order:
+	//
+	//  1. Flip readiness to not-ready FIRST, before anything else
+	//     stops -- a Kubernetes readinessProbe polling /readyz needs a
+	//     window to observe this and stop routing NEW traffic to this
+	//     pod before step 2 below ever closes the listener, so a
+	//     request racing the SIGTERM is far less likely to be routed
+	//     here only to hit a closing connection.
+	//  2. Stop accepting new HTTP connections and drain in-flight
+	//     requests, bounded by shutdownCtx.
+	//  3. Stop the outbox relay and the Kafka consumer's loop cleanly:
+	//     cancel their contexts (no new message is fetched/handled
+	//     after this) and wait, bounded by the SAME shutdownCtx, for
+	//     their goroutines to actually finish in-flight work (a
+	//     message already being handled commits its offset before Run
+	//     returns -- see Consumer.Run/handleMessage) rather than
+	//     merely asking them to stop and moving on. This is the
+	//     "final offset commit" guarantee: no message is left
+	//     processed-but-uncommitted by an abrupt stop.
+	//  4. Only THEN do the deferred consumer.Close()/closePublisher()/
+	//     persistence.close() calls (registered earlier in this
+	//     function, so by defer's LIFO order they run AFTER this
+	//     function returns) -- persistence.close(), which closes the
+	//     pgx pool, is registered FIRST and so by LIFO runs LAST of
+	//     all, after every consumer/relay goroutine has already
+	//     stopped touching it.
+	readiness.SetNotReady()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	err = httpServer.Shutdown(shutdownCtx)
+
 	// Let the relay finish its in-flight pass so an event committed by a
 	// request (or a consumed message) that completed just before shutdown
 	// is not stranded until the next pod boots.
@@ -193,6 +244,19 @@ func run() error {
 	case <-shutdownCtx.Done():
 		logger.Warn("outbox relay did not stop before the shutdown deadline")
 	}
+
+	// Stop the Kafka consumer's loop cleanly: cancel so no NEW message
+	// is fetched, then wait (bounded) for any message already being
+	// handled to finish -- including its offset commit -- before this
+	// function returns and the deferred consumer.Close()/
+	// persistence.close() calls run.
+	cancelConsumer()
+	select {
+	case <-consumerDone:
+	case <-shutdownCtx.Done():
+		logger.Warn("kafka consumer did not stop before the shutdown deadline")
+	}
+
 	return err
 }
 
