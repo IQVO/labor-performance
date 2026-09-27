@@ -8,13 +8,25 @@
 // wes-work-planning's own consumer's skip-unrecognized-event-type
 // behavior — since this is a shared topic by convention even though
 // fulfillment-execution publishes no other event type to it today.
+//
+// As of ADR-0027 (fulfillment-execution) / ADR-0021 (wes-work-planning)
+// Phase 2 Task 2d, this consumer dual-reads: a message may arrive either
+// in the legacy flat envelope shape or in the CloudEvents 1.0 structured
+// envelope fulfillment-execution's own apis/asyncapi.yaml has always
+// specified as the target shape. Both decode paths normalize to the same
+// internal envelope.Envelope before handing off to the unchanged
+// handleFulfillmentEvent logic below — there is exactly one business-logic
+// path, never two.
 package kafka
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
+	"time"
 
 	kafkago "github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel/attribute"
@@ -120,8 +132,8 @@ func (c *Consumer) handleMessage(ctx context.Context, msg kafkago.Message) error
 	)
 	defer span.End()
 
-	var env envelope.Envelope
-	if err := json.Unmarshal(msg.Value, &env); err != nil {
+	env, err := decodeEnvelope(msg.Value)
+	if err != nil {
 		recordSpanError(span, err)
 		c.log(msgCtx, "skipping unparseable kafka message", "topic", topic, "error", err)
 		_ = c.reader.CommitMessages(ctx, msg)
@@ -147,6 +159,89 @@ func (c *Consumer) handleMessage(ctx context.Context, msg kafkago.Message) error
 		return err
 	}
 	return nil
+}
+
+// cloudEventsProbe unmarshals just enough of a message to tell whether it
+// is a CloudEvents 1.0 structured envelope: the flat envelope has no
+// specversion key at all, so its presence (any non-empty value) is the
+// dual-read discriminator ADR-0027/0021 specify. A malformed or
+// unrecognized specversion (i.e. present but not "1.0") is treated as
+// unhandleable and fails soft, mirroring this consumer's existing
+// unparseable-message posture (log + commit, never redelivered forever).
+type cloudEventsProbe struct {
+	Specversion string `json:"specversion"`
+}
+
+// cloudEvent is the CloudEvents 1.0 structured envelope shape specified by
+// fulfillment-execution's apis/asyncapi.yaml (ADR-0004, implemented by
+// ADR-0027/0021). data is left as json.RawMessage — its shape
+// (taskCompletedData) is byte-identical to the flat envelope's own data
+// field, this migration is envelope-only.
+type cloudEvent struct {
+	Specversion     string          `json:"specversion"`
+	Id              string          `json:"id"`
+	Type            string          `json:"type"`
+	Source          string          `json:"source"`
+	Subject         string          `json:"subject"`
+	Time            time.Time       `json:"time"`
+	Datacontenttype string          `json:"datacontenttype"`
+	Data            json.RawMessage `json:"data"`
+}
+
+// eventTypePrefix is the reverse-DNS prefix fulfillment-execution's
+// CloudEvents `type` attribute carries ahead of the bare event name this
+// consumer's switch/case logic keys on (e.g.
+// "com.warehouse.wes.fulfillment-execution.task.TaskCompleted" ->
+// "TaskCompleted"). Stripping is done by taking the last dot-delimited
+// segment rather than hardcoding the whole prefix, so any bounded-context
+// segment fulfillment-execution's asyncapi.yaml already documents (task.*
+// or package.*) still resolves correctly without this consumer needing to
+// know every segment value.
+func bareEventType(cloudEventsType string) string {
+	if idx := strings.LastIndex(cloudEventsType, "."); idx >= 0 {
+		return cloudEventsType[idx+1:]
+	}
+	return cloudEventsType
+}
+
+// decodeEnvelope dual-reads a raw Kafka message value: a flat envelope
+// (event_id/event_type/occurred_at/source/data) or a CloudEvents 1.0
+// structured envelope (specversion/id/type/source/subject/time/data), per
+// ADR-0027 (fulfillment-execution) / ADR-0021 (wes-work-planning) Phase 2
+// Task 2d. Either shape normalizes to the same envelope.Envelope so the
+// rest of this consumer (handleFulfillmentEvent and everything it calls)
+// is completely unaware of which shape arrived on the wire.
+func decodeEnvelope(raw []byte) (envelope.Envelope, error) {
+	var probe cloudEventsProbe
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return envelope.Envelope{}, err
+	}
+
+	if probe.Specversion == "" {
+		// No specversion key at all (or explicitly empty): the legacy
+		// flat envelope shape.
+		var flat envelope.Envelope
+		if err := json.Unmarshal(raw, &flat); err != nil {
+			return envelope.Envelope{}, err
+		}
+		return flat, nil
+	}
+
+	if probe.Specversion != "1.0" {
+		return envelope.Envelope{}, fmt.Errorf("unrecognized CloudEvents specversion %q", probe.Specversion)
+	}
+
+	var ce cloudEvent
+	if err := json.Unmarshal(raw, &ce); err != nil {
+		return envelope.Envelope{}, err
+	}
+	return envelope.Envelope{
+		EventId:    ce.Id,
+		EventType:  bareEventType(ce.Type),
+		OccurredAt: ce.Time,
+		Source:     ce.Source,
+		Data:       ce.Data,
+	}, nil
 }
 
 // handleFulfillmentEvent filters for TaskCompleted and feeds it into the
