@@ -113,6 +113,11 @@ func run() error {
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
 		GetUtilization:         getUtilization,
+		// IdempotencyPool is nil for the in-memory dev configuration
+		// (DATABASE_URL unset) — see persistence.pool's own doc
+		// comment and RequireIdempotencyKey's nil-pool convention in
+		// server.go.
+		IdempotencyPool: persistence.pool,
 	}
 
 	httpServer := &http.Server{
