@@ -58,32 +58,27 @@ func decode(t *testing.T, msg kafkago.Message) (envelope.AnalyticsEnvelope, map[
 	return env, data
 }
 
+// publishCase is one row of TestAnalyticsPublisherPublishesEachDomainEvent's
+// table: a domain event, the envelope shape the analytics topic must carry,
+// and the payload assertions for its data block.
+type publishCase struct {
+	name          string
+	event         shared.DomainEvent
+	wantEventType string
+	wantKey       string
+	assertData    func(t *testing.T, data map[string]any)
+}
+
 func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 	pct := 86.5
 
-	tests := []struct {
-		name          string
-		event         shared.DomainEvent
-		wantEventType string
-		wantKey       string
-		assertData    func(t *testing.T, data map[string]any)
-	}{
+	tests := []publishCase{
 		{
 			name:          "LaborStandardDefined",
 			event:         shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9)),
 			wantEventType: envelope.EventTypeLaborStandardDefined,
 			wantKey:       "PICK",
-			assertData: func(t *testing.T, data map[string]any) {
-				if data["expected_seconds"] != float64(45) {
-					t.Errorf("expected_seconds = %v, want 45", data["expected_seconds"])
-				}
-				if data["task_type"] != "PICK" {
-					t.Errorf("task_type = %v, want PICK", data["task_type"])
-				}
-				if _, present := data["travel_component_seconds"]; present {
-					t.Errorf("expected travel_component_seconds to be omitted when nil, got %v", data["travel_component_seconds"])
-				}
-			},
+			assertData:    assertStandardDefinedData,
 		},
 		{
 			name: "LaborStandardDefined with a declared travel component",
@@ -93,28 +88,14 @@ func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 			}(),
 			wantEventType: envelope.EventTypeLaborStandardDefined,
 			wantKey:       "PICK",
-			assertData: func(t *testing.T, data map[string]any) {
-				if data["travel_component_seconds"] != float64(15) {
-					t.Errorf("travel_component_seconds = %v, want 15", data["travel_component_seconds"])
-				}
-			},
+			assertData:    assertStandardDefinedTravelData,
 		},
 		{
 			name:          "LaborStandardRevised",
 			event:         shared.NewLaborStandardRevised(at(10), "std-2", shared.Pick, 45, 40, nil, at(10)),
 			wantEventType: envelope.EventTypeLaborStandardRevised,
 			wantKey:       "PICK",
-			assertData: func(t *testing.T, data map[string]any) {
-				if data["previous_expected_seconds"] != float64(45) {
-					t.Errorf("previous_expected_seconds = %v, want 45", data["previous_expected_seconds"])
-				}
-				if data["expected_seconds"] != float64(40) {
-					t.Errorf("expected_seconds = %v, want 40", data["expected_seconds"])
-				}
-				if _, present := data["travel_component_seconds"]; present {
-					t.Errorf("expected travel_component_seconds to be omitted when nil, got %v", data["travel_component_seconds"])
-				}
-			},
+			assertData:    assertStandardRevisedData,
 		},
 		{
 			name: "TaskPerformanceRecorded",
@@ -122,57 +103,105 @@ func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 				at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, nil, at(9)),
 			wantEventType: envelope.EventTypeTaskPerformanceRecorded,
 			wantKey:       "PACK",
-			assertData: func(t *testing.T, data map[string]any) {
-				if data["task_id"] != "task-1" {
-					t.Errorf("task_id = %v, want task-1", data["task_id"])
-				}
-				if data["efficiency_pct"] != 86.5 {
-					t.Errorf("efficiency_pct = %v, want 86.5", data["efficiency_pct"])
-				}
-				if data["actual_seconds"] != float64(52) {
-					t.Errorf("actual_seconds = %v, want 52", data["actual_seconds"])
-				}
-				// completed_at is the business time and must travel
-				// distinctly from the envelope's occurred_at.
-				if data["completed_at"] != at(9).Format(time.RFC3339) {
-					t.Errorf("completed_at = %v, want %v", data["completed_at"], at(9).Format(time.RFC3339))
-				}
-			},
+			assertData:    assertTaskPerformanceRecordedData,
 		},
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			p, w := newTestPublisher()
+		t.Run(tc.name, func(t *testing.T) { assertPublishedEnvelope(t, tc) })
+	}
+}
 
-			if err := p.Publish(context.Background(), tc.event); err != nil {
-				t.Fatalf("Publish: %v", err)
-			}
-			if len(w.msgs) != 1 {
-				t.Fatalf("got %d messages, want 1", len(w.msgs))
-			}
+// assertPublishedEnvelope publishes tc's event through a fresh publisher and
+// pins the envelope, partition key, and payload the analytics topic must
+// carry for it.
+func assertPublishedEnvelope(t *testing.T, tc publishCase) {
+	t.Helper()
+	p, w := newTestPublisher()
 
-			env, data := decode(t, w.msgs[0])
-			if env.EventType != tc.wantEventType {
-				t.Errorf("event_type = %q, want %q", env.EventType, tc.wantEventType)
-			}
-			if env.Source != envelope.Source {
-				t.Errorf("source = %q, want %q", env.Source, envelope.Source)
-			}
-			if env.SchemaVersion != envelope.AnalyticsSchemaVersion {
-				t.Errorf("schema_version = %d, want %d", env.SchemaVersion, envelope.AnalyticsSchemaVersion)
-			}
-			if env.EventId == "" {
-				t.Error("event_id is empty; it is the projection's idempotency key")
-			}
-			if !env.OccurredAt.Equal(tc.event.OccurredAt()) {
-				t.Errorf("occurred_at = %v, want %v", env.OccurredAt, tc.event.OccurredAt())
-			}
-			if got := string(w.msgs[0].Key); got != tc.wantKey {
-				t.Errorf("partition key = %q, want %q", got, tc.wantKey)
-			}
-			tc.assertData(t, data)
-		})
+	if err := p.Publish(context.Background(), tc.event); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if len(w.msgs) != 1 {
+		t.Fatalf("got %d messages, want 1", len(w.msgs))
+	}
+
+	env, data := decode(t, w.msgs[0])
+	if env.EventType != tc.wantEventType {
+		t.Errorf("event_type = %q, want %q", env.EventType, tc.wantEventType)
+	}
+	if env.Source != envelope.Source {
+		t.Errorf("source = %q, want %q", env.Source, envelope.Source)
+	}
+	if env.SchemaVersion != envelope.AnalyticsSchemaVersion {
+		t.Errorf("schema_version = %d, want %d", env.SchemaVersion, envelope.AnalyticsSchemaVersion)
+	}
+	if env.EventId == "" {
+		t.Error("event_id is empty; it is the projection's idempotency key")
+	}
+	if !env.OccurredAt.Equal(tc.event.OccurredAt()) {
+		t.Errorf("occurred_at = %v, want %v", env.OccurredAt, tc.event.OccurredAt())
+	}
+	if got := string(w.msgs[0].Key); got != tc.wantKey {
+		t.Errorf("partition key = %q, want %q", got, tc.wantKey)
+	}
+	tc.assertData(t, data)
+}
+
+// assertStandardDefinedData pins a LaborStandardDefined payload without a
+// travel component: the field must be OMITTED, not zero.
+func assertStandardDefinedData(t *testing.T, data map[string]any) {
+	t.Helper()
+	if data["expected_seconds"] != float64(45) {
+		t.Errorf("expected_seconds = %v, want 45", data["expected_seconds"])
+	}
+	if data["task_type"] != "PICK" {
+		t.Errorf("task_type = %v, want PICK", data["task_type"])
+	}
+	if _, present := data["travel_component_seconds"]; present {
+		t.Errorf("expected travel_component_seconds to be omitted when nil, got %v", data["travel_component_seconds"])
+	}
+}
+
+// assertStandardDefinedTravelData pins a LaborStandardDefined payload that
+// declares a travel component.
+func assertStandardDefinedTravelData(t *testing.T, data map[string]any) {
+	t.Helper()
+	if data["travel_component_seconds"] != float64(15) {
+		t.Errorf("travel_component_seconds = %v, want 15", data["travel_component_seconds"])
+	}
+}
+
+// assertStandardRevisedData pins a LaborStandardRevised payload.
+func assertStandardRevisedData(t *testing.T, data map[string]any) {
+	t.Helper()
+	if data["previous_expected_seconds"] != float64(45) {
+		t.Errorf("previous_expected_seconds = %v, want 45", data["previous_expected_seconds"])
+	}
+	if data["expected_seconds"] != float64(40) {
+		t.Errorf("expected_seconds = %v, want 40", data["expected_seconds"])
+	}
+	if _, present := data["travel_component_seconds"]; present {
+		t.Errorf("expected travel_component_seconds to be omitted when nil, got %v", data["travel_component_seconds"])
+	}
+}
+
+// assertTaskPerformanceRecordedData pins a TaskPerformanceRecorded payload.
+func assertTaskPerformanceRecordedData(t *testing.T, data map[string]any) {
+	t.Helper()
+	if data["task_id"] != "task-1" {
+		t.Errorf("task_id = %v, want task-1", data["task_id"])
+	}
+	if data["efficiency_pct"] != 86.5 {
+		t.Errorf("efficiency_pct = %v, want 86.5", data["efficiency_pct"])
+	}
+	if data["actual_seconds"] != float64(52) {
+		t.Errorf("actual_seconds = %v, want 52", data["actual_seconds"])
+	}
+	// completed_at is the business time and must travel
+	// distinctly from the envelope's occurred_at.
+	if data["completed_at"] != at(9).Format(time.RFC3339) {
+		t.Errorf("completed_at = %v, want %v", data["completed_at"], at(9).Format(time.RFC3339))
 	}
 }
 

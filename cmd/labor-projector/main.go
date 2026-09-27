@@ -22,6 +22,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/analyticsstore"
@@ -75,34 +77,11 @@ func run() error {
 	kafkaBrokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
 	migrationsPath := getenv("ANALYTICS_MIGRATIONS_PATH", "migrations/analytics")
 
-	// The projector owns the analytical schema, so it — and only it —
-	// runs those migrations on start. The reader never migrates.
-	//
-	// Retried: this fleet's Istio native sidecars reset EVERY pod's
-	// first outbound TCP dial ~10s after the app starts
-	// (holdApplicationUntilProxyStarts is a no-op for native sidecars).
-	// A single attempt turns that transient condition into
-	// CrashLoopBackOff; the retry still fails closed once its budget is
-	// exhausted.
-	if err := bootretry.Retry(rootCtx, logger, "run analytics migrations", func() error {
-		return postgres.RunMigrations(analyticsURL, migrationsPath)
-	}); err != nil {
-		return err
-	}
-
-	pool, err := analyticsstore.NewPool(rootCtx, analyticsURL)
+	pool, err := openAnalyticsPool(rootCtx, logger, analyticsURL, migrationsPath)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
-	// ParseConfig/NewWithConfig do not themselves establish a
-	// connection, so without this the first-dial reset would surface
-	// inside the first consumed message instead of at boot.
-	if err := bootretry.Retry(rootCtx, logger, "ping analytics database", func() error {
-		return pool.Ping(rootCtx)
-	}); err != nil {
-		return err
-	}
 
 	consumer := inboundkafka.NewAnalyticsConsumer(
 		kafkaBrokers,
@@ -116,13 +95,7 @@ func run() error {
 		}
 	}()
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"ok"}`))
-	})
-	srv := &http.Server{Addr: adminAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	srv := newAdminServer(adminAddr)
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -157,6 +130,51 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// openAnalyticsPool runs the analytical migrations and opens a verified
+// pool against the analytical database. The projector owns the analytical
+// schema, so it — and only it — runs those migrations on start; the reader
+// never migrates.
+//
+// Both the migrations and the ping are retried: this fleet's Istio native
+// sidecars reset EVERY pod's first outbound TCP dial ~10s after the app
+// starts (holdApplicationUntilProxyStarts is a no-op for native sidecars).
+// A single attempt turns that transient condition into CrashLoopBackOff;
+// the retry still fails closed once its budget is exhausted.
+// ParseConfig/NewWithConfig do not themselves establish a connection, so
+// without the ping the first-dial reset would surface inside the first
+// consumed message instead of at boot.
+func openAnalyticsPool(ctx context.Context, logger *slog.Logger, analyticsURL, migrationsPath string) (*pgxpool.Pool, error) {
+	if err := bootretry.Retry(ctx, logger, "run analytics migrations", func() error {
+		return postgres.RunMigrations(analyticsURL, migrationsPath)
+	}); err != nil {
+		return nil, err
+	}
+	pool, err := analyticsstore.NewPool(ctx, analyticsURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := bootretry.Retry(ctx, logger, "ping analytics database", func() error {
+		return pool.Ping(ctx)
+	}); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
+}
+
+// newAdminServer builds the projector's admin listener: a health endpoint
+// and nothing else — the projector serves no reports (that is the reader's
+// job) and exposes no other surface.
+func newAdminServer(addr string) *http.Server {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 }
 
 // newLogger builds the process-wide structured logger, wrapped so any
