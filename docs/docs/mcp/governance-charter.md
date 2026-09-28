@@ -147,6 +147,54 @@ Jaeger and Grafana alongside HTTP.
    the tool count exceeds 8, a tool name breaks the `verb_noun` pattern, or a
    tool lacks annotations or a description. It is a plain `go test`, so it
    runs in the existing CI `test` job.
+4. **Eval gate (E1–E3):** the tool surface **MUST** pass the eval suites in
+   `internal/adapters/inbound/mcp/eval_*_test.go` and
+   `evalsuite_test.go`, all plain `go test`s inside the CI `test` job:
+    - **E1 — schema & metadata** (`eval_governance_test.go`): every
+      advertised tool's input schema resolves as a JSON Schema, accepts a
+      schema-shaped arguments object, and REJECTS wrong-typed values (it
+      constrains model input, not just decorates it); every parameter
+      carries a non-empty description; the advertised surface matches
+      `testdata/tool_registry.golden`; and this repo's tools are present,
+      correctly credited, and globally unique in
+      `testdata/fleet_tool_snapshot.golden` (the federated registry kept
+      identical across all fleet repos — a model host mounts several of
+      these servers together, so tool names MUST NOT collide).
+    - **E2 — wire conformance** (`eval_conformance_test.go`): over the real
+      Streamable HTTP handler — initialize handshake carries server info
+      and non-empty instructions; unknown tools, wrong-typed arguments,
+      unknown extra arguments, unknown resources and prompts are rejected;
+      resource templates and prompts are discoverable; a closed session
+      fails loudly.
+    - **E3 — behavioral evals** (`evalsuite_test.go` +
+      `testdata/features/mcp_tools.feature`): Gherkin scenarios driving
+      `tools/call` with model-realistic arguments (stray keys, wrong types,
+      unknown associates and task types) against seeded state at fixed
+      clock offsets, pinning structured results — including the nullable
+      metrics, which MUST stay `null` rather than become a fabricated
+      number.
+
+### Pinned behavioral contracts the evals found
+
+- Typed tool schemas are **strict** (`additionalProperties: false`, the
+  SDK default): stray model-generated argument keys are rejected with a
+  validation error, not silently ignored.
+- `get_associate_scorecard` with two scored tasks reports trend
+  `INSUFFICIENT_DATA` — `ClassifyTrend` needs 3 scored recent tasks — and
+  a false coaching flag (likewise a 3-task rule). Both are real values,
+  not absences.
+- `get_task_type_utilization`'s `associates` count derives from the
+  **idle-period** read, not from task rows: a task type with recorded
+  tasks but no idle gaps reports `associates: 0` alongside non-zero
+  `taskSeconds` (pinned in the 2h-window PACK scenario).
+- The utilization window filter admits rows whose `CompletedAt` is after
+  the (fixed) clock's now — the read is `since`-bounded only. The eval
+  seed keeps every in-window completion in the past so the pins do not
+  depend on this.
+- `get_task_type_performance` for a valid-but-never-seen task type
+  succeeds with zero counts and `null` means, while `get_labor_standard`
+  for the same task type errors ("no active labor standard") — a closed
+  enum with no rows is knowable, an unposted standard is not.
 
 ## 11. Changing this charter
 

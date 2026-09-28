@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riandyrn/otelchi"
 	otelchimetric "github.com/riandyrn/otelchi/metric"
 
@@ -31,6 +32,23 @@ type Server struct {
 	GetAssociateScorecard  *usecases.GetAssociateScorecard
 	GetTaskTypePerformance *usecases.GetTaskTypePerformance
 	GetUtilization         *usecases.GetUtilization
+	// IdempotencyPool, when non-nil, wires RequireIdempotencyKey onto
+	// POST /standards (see idempotency.go). A nil pool means "no
+	// transactional Postgres backing wired" (in-memory dev/test
+	// configuration) — the idempotency middleware needs a real
+	// pgxpool.Pool to begin its own transaction, so it is simply not
+	// applied in that case, mirroring this codebase's existing
+	// convention for every other optional Postgres-backed capability
+	// (UnitOfWork, the outbox relay) and order-management's identical
+	// IdempotencyPool field (PR #105 / ADR 0023).
+	IdempotencyPool *pgxpool.Pool
+	// Readiness backs GET /readyz (ADR-0017 §graceful shutdown): flipped
+	// to not-ready as the FIRST step of shutdown, distinct from
+	// /healthz (liveness, never flipped). Optional: a nil Readiness
+	// (every existing caller/test that predates this field) always
+	// reports ready, mirroring order-management's identical Readiness
+	// field (ADR-0025).
+	Readiness *Readiness
 }
 
 // NewRouter builds the chi router for every endpoint in CLAUDE.md's REST
@@ -64,8 +82,27 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 	// /healthz stays outside any route group; it never needed a
 	// credential and still doesn't now that REST auth is gone.
 	r.Get("/healthz", s.handleHealthz)
+	// /readyz is distinct from /healthz (ADR-0017 §graceful shutdown):
+	// liveness never flips, readiness flips to not-ready as the FIRST
+	// step of shutdown so a Kubernetes readinessProbe pointed here
+	// stops routing new traffic during the drain window that follows.
+	r.Get("/readyz", s.handleReadyz)
 
-	r.Post("/standards", s.handleDefineStandard)
+	// POST /standards is route-scoped (r.With, not r.Use) behind
+	// RequireIdempotencyKey — it is this service's one true
+	// resource-creation endpoint (DefineStandard mints a fresh
+	// StandardId server-side; a lost 201 response and a client retry
+	// would otherwise silently close-and-redefine the standard a
+	// second time). IdempotencyPool nil (in-memory dev/test
+	// configuration, no transactional Postgres backing) skips the
+	// middleware entirely, mirroring every other optional
+	// Postgres-backed capability's nil convention in this service. See
+	// docs/docs/adr/0016-idempotency-key-middleware.md.
+	if s.IdempotencyPool != nil {
+		r.With(RequireIdempotencyKey(s.IdempotencyPool)).Post("/standards", s.handleDefineStandard)
+	} else {
+		r.Post("/standards", s.handleDefineStandard)
+	}
 	r.Get("/standards/{taskType}", s.handleGetStandard)
 	r.Get("/associates/{associateId}/scorecard", s.handleGetAssociateScorecard)
 	r.Get("/task-types/{taskType}/performance", s.handleGetTaskTypePerformance)

@@ -27,6 +27,20 @@ func TestStandardMetrics_CountsByOutcome(t *testing.T) {
 	metrics.StandardDefinitionAccepted(ctx)
 	metrics.StandardDefinitionRejected(ctx)
 
+	counts := outcomeCounts(t, reader, ctx)
+
+	if counts["accepted"] != 2 {
+		t.Errorf("outcome=accepted count = %d, want 2", counts["accepted"])
+	}
+	if counts["rejected"] != 1 {
+		t.Errorf("outcome=rejected count = %d, want 1", counts["rejected"])
+	}
+}
+
+// outcomeCounts collects the standards-defined counter's per-outcome data
+// points from the manual reader.
+func outcomeCounts(t *testing.T, reader *metric.ManualReader, ctx context.Context) map[string]int64 {
+	t.Helper()
 	var collected metricdata.ResourceMetrics
 	if err := reader.Collect(ctx, &collected); err != nil {
 		t.Fatalf("Collect: %v", err)
@@ -51,11 +65,5 @@ func TestStandardMetrics_CountsByOutcome(t *testing.T) {
 			}
 		}
 	}
-
-	if counts["accepted"] != 2 {
-		t.Errorf("outcome=accepted count = %d, want 2", counts["accepted"])
-	}
-	if counts["rejected"] != 1 {
-		t.Errorf("outcome=rejected count = %d, want 1", counts["rejected"])
-	}
+	return counts
 }

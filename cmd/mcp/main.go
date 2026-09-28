@@ -23,6 +23,7 @@ import (
 	"time"
 
 	inboundmcp "github.com/claudioed/labor-performance/internal/adapters/inbound/mcp"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/postgres"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/telemetry"
@@ -130,12 +131,23 @@ func buildAdapters(ctx context.Context, databaseURL, migrationsPath string, logg
 		}, noop, nil
 	}
 
-	if err := postgres.RunMigrations(databaseURL, migrationsPath); err != nil {
+	if err := bootretry.Retry(ctx, logger, "run migrations", func() error {
+		return postgres.RunMigrations(databaseURL, migrationsPath)
+	}); err != nil {
 		return adapterSet{}, noop, err
 	}
 
 	pool, err := postgres.NewPool(ctx, databaseURL)
 	if err != nil {
+		return adapterSet{}, noop, err
+	}
+	// ParseConfig/NewWithConfig do not themselves establish a
+	// connection, so without this the first-dial reset would surface
+	// inside the first served request instead of at boot.
+	if err := bootretry.Retry(ctx, logger, "ping database", func() error {
+		return pool.Ping(ctx)
+	}); err != nil {
+		pool.Close()
 		return adapterSet{}, noop, err
 	}
 

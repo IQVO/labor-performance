@@ -102,6 +102,24 @@ func (r *OutboxRelay) RelayOnce(ctx context.Context) (int, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	batch, err := claimOutboxRows(ctx, tx, r.batchSize)
+	if err != nil {
+		return 0, err
+	}
+	return r.publishBatch(ctx, tx, batch)
+}
+
+// pendingOutboxRow is one claimed, not-yet-published outbox_events row.
+type pendingOutboxRow struct {
+	id  int64
+	msg outboundkafka.Encoded
+}
+
+// claimOutboxRows locks and reads up to batchSize unpublished rows, oldest
+// first, for the pass to send. FOR UPDATE SKIP LOCKED keeps two relays (a
+// rolling deploy's overlapping old and new pod) from claiming the same
+// row.
+func claimOutboxRows(ctx context.Context, tx pgx.Tx, batchSize int) ([]pendingOutboxRow, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, topic, event_type, key, value, headers
 		FROM outbox_events
@@ -109,50 +127,45 @@ func (r *OutboxRelay) RelayOnce(ctx context.Context) (int, error) {
 		ORDER BY id
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED
-	`, r.batchSize)
+	`, batchSize)
 	if err != nil {
-		return 0, fmt.Errorf("postgres: claim outbox rows: %w", err)
+		return nil, fmt.Errorf("postgres: claim outbox rows: %w", err)
 	}
-	type pending struct {
-		id  int64
-		msg outboundkafka.Encoded
-	}
-	var batch []pending
+	var batch []pendingOutboxRow
 	for rows.Next() {
-		var p pending
+		var p pendingOutboxRow
 		var headers []byte
 		if err := rows.Scan(&p.id, &p.msg.Topic, &p.msg.EventType, &p.msg.Key, &p.msg.Value, &headers); err != nil {
 			rows.Close()
-			return 0, fmt.Errorf("postgres: scan outbox row: %w", err)
+			return nil, fmt.Errorf("postgres: scan outbox row: %w", err)
 		}
 		if p.msg.Headers, err = unmarshalHeaders(headers); err != nil {
 			rows.Close()
-			return 0, fmt.Errorf("postgres: decode outbox row %d headers: %w", p.id, err)
+			return nil, fmt.Errorf("postgres: decode outbox row %d headers: %w", p.id, err)
 		}
 		batch = append(batch, p)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("postgres: read outbox rows: %w", err)
+		return nil, fmt.Errorf("postgres: read outbox rows: %w", err)
 	}
+	return batch, nil
+}
 
+// publishBatch sends each claimed row to the sink in id order, marking it
+// published as it goes, then commits the pass. On the first Send failure it
+// stops exactly at the failed row (preserving per-key ordering — a later
+// event for the same key must not overtake a failed earlier one), records
+// the error on that row, commits what was already sent, and returns the
+// error: at-least-once, with the failed row retried on the next pass.
+func (r *OutboxRelay) publishBatch(ctx context.Context, tx pgx.Tx, batch []pendingOutboxRow) (int, error) {
 	published := 0
 	for _, p := range batch {
 		if err := r.sink.Send(ctx, p.msg); err != nil {
-			if _, uerr := tx.Exec(ctx, `
-				UPDATE outbox_events SET attempts = attempts + 1, last_error = $2 WHERE id = $1
-			`, p.id, err.Error()); uerr != nil {
-				err = errors.Join(err, fmt.Errorf("postgres: record outbox failure: %w", uerr))
-			}
-			if cerr := tx.Commit(ctx); cerr != nil {
-				err = errors.Join(err, fmt.Errorf("postgres: commit relay pass: %w", cerr))
-			}
-			return published, fmt.Errorf("outbox relay: send %s to %s (row %d): %w", p.msg.EventType, p.msg.Topic, p.id, err)
+			return published, recordSendFailure(ctx, tx, p, err)
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE outbox_events SET published_at = now(), attempts = attempts + 1, last_error = NULL WHERE id = $1
-		`, p.id); err != nil {
-			return published, fmt.Errorf("postgres: mark outbox row %d published: %w", p.id, err)
+		if err := markPublished(ctx, tx, p.id); err != nil {
+			return published, err
 		}
 		published++
 	}
@@ -163,6 +176,31 @@ func (r *OutboxRelay) RelayOnce(ctx context.Context) (int, error) {
 		r.logger.DebugContext(ctx, "outbox relay published events", "count", published)
 	}
 	return published, nil
+}
+
+// recordSendFailure marks the failed row's attempt and error, commits the
+// pass (persisting both the failure and every earlier row's published
+// mark), and wraps err exactly as the relay has always reported it.
+func recordSendFailure(ctx context.Context, tx pgx.Tx, p pendingOutboxRow, err error) error {
+	if _, uerr := tx.Exec(ctx, `
+		UPDATE outbox_events SET attempts = attempts + 1, last_error = $2 WHERE id = $1
+	`, p.id, err.Error()); uerr != nil {
+		err = errors.Join(err, fmt.Errorf("postgres: record outbox failure: %w", uerr))
+	}
+	if cerr := tx.Commit(ctx); cerr != nil {
+		err = errors.Join(err, fmt.Errorf("postgres: commit relay pass: %w", cerr))
+	}
+	return fmt.Errorf("outbox relay: send %s to %s (row %d): %w", p.msg.EventType, p.msg.Topic, p.id, err)
+}
+
+// markPublished marks one successfully sent row published.
+func markPublished(ctx context.Context, tx pgx.Tx, id int64) error {
+	if _, err := tx.Exec(ctx, `
+		UPDATE outbox_events SET published_at = now(), attempts = attempts + 1, last_error = NULL WHERE id = $1
+	`, id); err != nil {
+		return fmt.Errorf("postgres: mark outbox row %d published: %w", id, err)
+	}
+	return nil
 }
 
 func unmarshalHeaders(raw []byte) ([]kafkago.Header, error) {

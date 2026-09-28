@@ -96,42 +96,8 @@ func (uc *RecordTaskPerformance) Execute(ctx context.Context, req RecordTaskPerf
 			return nil
 		}
 
-		var standardSecondsAtCompletion int64
-		if req.TaskType != "" {
-			active, err := uc.Standards.FindActiveAsOf(ctx, req.TaskType, req.CompletedAt)
-			if err != nil {
-				return err
-			}
-			if active != nil {
-				standardSecondsAtCompletion = active.ExpectedSeconds()
-			}
-		}
-
-		recorded, err := performance.New(req.KafkaEventId, req.TaskId, req.AssociateId, req.TaskType, req.ActualSeconds, standardSecondsAtCompletion, req.CompletedAt)
+		recorded, err := uc.record(ctx, req)
 		if err != nil {
-			return err
-		}
-
-		// Resolve the associate's PRIOR completion (the idle gap's start
-		// boundary) BEFORE saving this row — Save makes `recorded` the
-		// most recent row for this associate, so looking it up after
-		// Save would see this task itself as its own "previous"
-		// completion.
-		previousCompletedAt, havePrevious, err := uc.previousCompletionFor(ctx, req.AssociateId)
-		if err != nil {
-			return err
-		}
-
-		if err := uc.Performances.Save(ctx, recorded); err != nil {
-			return err
-		}
-
-		idleSecondsBefore, err := uc.recordIdleGap(ctx, req, previousCompletedAt, havePrevious)
-		if err != nil {
-			return err
-		}
-
-		if err := uc.Events.Publish(ctx, shared.NewTaskPerformanceRecorded(uc.Clock.Now(), recorded.TaskId(), recorded.AssociateId(), recorded.TaskType(), recorded.ActualSeconds(), recorded.EfficiencyPct(), idleSecondsBefore, recorded.CompletedAt())); err != nil {
 			return err
 		}
 		p = recorded
@@ -141,6 +107,66 @@ func (uc *RecordTaskPerformance) Execute(ctx context.Context, req RecordTaskPerf
 		return nil, err
 	}
 	return p, nil
+}
+
+// record performs the write phases for a first-time Kafka event id, in
+// order: load the as-of standard, build the TaskPerformance aggregate,
+// resolve the associate's prior completion, save the row, derive and save
+// the idle gap, then publish TaskPerformanceRecorded. Every phase runs on
+// the caller's unit of work, so a failure anywhere rolls them all back.
+func (uc *RecordTaskPerformance) record(ctx context.Context, req RecordTaskPerformanceRequest) (*performance.TaskPerformance, error) {
+	standardSecondsAtCompletion, err := uc.standardSecondsAtCompletion(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	recorded, err := performance.New(req.KafkaEventId, req.TaskId, req.AssociateId, req.TaskType, req.ActualSeconds, standardSecondsAtCompletion, req.CompletedAt)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve the associate's PRIOR completion (the idle gap's start
+	// boundary) BEFORE saving this row — Save makes `recorded` the
+	// most recent row for this associate, so looking it up after
+	// Save would see this task itself as its own "previous"
+	// completion.
+	previousCompletedAt, havePrevious, err := uc.previousCompletionFor(ctx, req.AssociateId)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := uc.Performances.Save(ctx, recorded); err != nil {
+		return nil, err
+	}
+
+	idleSecondsBefore, err := uc.recordIdleGap(ctx, req, previousCompletedAt, havePrevious)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := uc.Events.Publish(ctx, shared.NewTaskPerformanceRecorded(uc.Clock.Now(), recorded.TaskId(), recorded.AssociateId(), recorded.TaskType(), recorded.ActualSeconds(), recorded.EfficiencyPct(), idleSecondsBefore, recorded.CompletedAt())); err != nil {
+		return nil, err
+	}
+	return recorded, nil
+}
+
+// standardSecondsAtCompletion resolves whichever LaborStandard was active
+// for req.TaskType AS OF req.CompletedAt (not "active right now"), so a
+// possibly out-of-order or replayed message is scored against the standard
+// that was genuinely in force when the task completed. Zero when the task
+// type carries none — the task is recorded unscorable.
+func (uc *RecordTaskPerformance) standardSecondsAtCompletion(ctx context.Context, req RecordTaskPerformanceRequest) (int64, error) {
+	var standardSeconds int64
+	if req.TaskType != "" {
+		active, err := uc.Standards.FindActiveAsOf(ctx, req.TaskType, req.CompletedAt)
+		if err != nil {
+			return 0, err
+		}
+		if active != nil {
+			standardSeconds = active.ExpectedSeconds()
+		}
+	}
+	return standardSeconds, nil
 }
 
 // previousCompletionFor resolves the associate's most recent completion,

@@ -128,10 +128,34 @@ livenessProbe:
 
 readinessProbe:
   httpGet:
-    path: /healthz
+    # /readyz (ADR-0017 §graceful shutdown), NOT /healthz: readiness
+    # must flip to not-ready during a graceful SIGTERM drain (see
+    # cmd/labor/main.go's shutdown sequence) so this pod stops
+    # receiving NEW traffic while it finishes in-flight requests --
+    # /healthz stays liveness-only and never flips.
+    path: /readyz
     port: http
   initialDelaySeconds: 3
   periodSeconds: 5
+
+# startupProbe covers this fleet's known ~10s post-start first-outbound-dial
+# reset (Istio native sidecars; holdApplicationUntilProxyStarts is a no-op
+# for them): failureThreshold * periodSeconds = 60s gives the app-side boot
+# retry (internal/adapters/outbound/bootretry, ~31s worst case) room to
+# finish before liveness/readiness probing (and any liveness-triggered
+# restart) begins.
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 2
+  failureThreshold: 30
+
+# ADR-0017 §graceful shutdown: 10s HTTP/consumer/relay drain budget
+# (cmd/labor/main.go's shutdownCtx) + margin for the readinessProbe's
+# own periodSeconds=5 to have observed the not-ready flip before
+# traffic fully stops arriving.
+terminationGracePeriodSeconds: 30
 
 nodeSelector: {}
 tolerations: []
