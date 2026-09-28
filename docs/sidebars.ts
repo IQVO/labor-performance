@@ -55,6 +55,7 @@ const sidebars: SidebarsConfig = {
         'adr/0017-kafka-dlq-and-graceful-shutdown',
         'adr/0018-kafka-writer-hash-balancer',
         'adr/0019-horizontal-autoscaling-and-pgxpool-tuning',
+        'adr/0020-migrations-direct-postgres-connection',
       ],
     },
   ],

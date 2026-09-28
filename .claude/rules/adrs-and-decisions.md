@@ -1,4 +1,4 @@
-# ADR index (0001–0019)
+# ADR index (0001–0020)
 
 Full records live in `docs/docs/adr/` (Nygard format, Docusaurus-rendered
 at `/docs/adr`). This is a summary index — read the actual ADR before
@@ -25,6 +25,7 @@ relying on a detail not captured here.
 | 0017 | Kafka consumer dead-letter queue and graceful shutdown hardening | Accepted | `Consumer.handleMessage` retries `handleFulfillmentEvent` in-process (cenkalti/backoff/v4, up to 3 attempts) then dead-letters an exhausted/poisoned message to `warehouse.fulfillment.events.dlq`, committing the offset so one poison message never blocks the partition. Graceful shutdown gains a readiness-flip-first sequence backing a new `GET /readyz` distinct from `GET /healthz`. Ported from order-management's DLQ/shutdown design (PR #107, ADR 0025) — this service has no sibling-context outbound calls, so no circuit breaker work applies here. |
 | 0018 | Key-aware Hash balancer on every outbound Kafka writer | Accepted | Every writer in `internal/adapters/outbound/kafka` (`IntegrationPublisher`, `AnalyticsPublisher`, `RelaySink`) used `&kafkago.LeastBytes{}`, which ignores `Message.Key` for partition routing entirely — `Message.Key` (AssociateId / TaskType) was always set correctly but had no effect on partition placement. Switched every writer's `Balancer` to `&kafkago.Hash{}`. Same fleet-wide fix as order-management PR #111, closing the ordering gap warehouse-infra PR #42's 1→8 partition scaleup exposed. Proven via a real-broker Testcontainers test on an 8-partition topic. |
 | 0019 | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted | `autoscaling.<api\|projector\|reports\|frontend>` HPA blocks (all default-disabled) in `charts/labor-performance/values.yaml`, one `HorizontalPodAutoscaler` per independently-assessed workload; `mcp` deliberately excluded (in-memory MCP session state, no sticky routing). `postgres.MaxConns=10`/`StatementTimeout=5s` (OLTP, via PgBouncer) and `analyticsstore.MaxConns=5`/`ReportsMaxConns=5`/`StatementTimeout=10s`/`ReportsStatementTimeout=15s` (analytics, direct to Postgres). Ported from order-management's reference (PR #110, ADR 0026); mirrors warehouse-infra PR #43's PgBouncer OLTP/analytics DSN split as-is. |
+| 0020 | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted | `cmd/labor` and `cmd/mcp` now read `MIGRATIONS_DATABASE_URL` (fallback `DATABASE_URL`) for the golang-migrate step only; the runtime pgxpool stays on `DATABASE_URL`/PgBouncer unchanged. Fixes a fleet-wide crash-loop (`pq: unnamed prepared statement does not exist`) caused by `pg_advisory_lock`'s session-scoping being incompatible with PgBouncer transaction pooling (warehouse-infra PR #43) whenever 2+ replicas of `cmd/labor`/`cmd/mcp` start concurrently — including any ADR-0019 HPA scale-out. New chart value `database.migrationsExistingSecretKey` (`optional: true` secretKeyRef) wires the env var into both the `api` and `mcp` Deployments. Ported from order-management's reference (PR #115, ADR 0029); warehouse-infra PR #44 already provisions the secret key fleet-wide, `cmd/labor-projector`/`cmd/labor-reports` are out of scope (never on PgBouncer). |
 
 ## Reading order for a newcomer
 
@@ -50,6 +51,13 @@ relying on a detail not captured here.
    order-management's reference (PR #110, ADR 0026), read whenever
    touching `charts/labor-performance/values.yaml`'s `autoscaling:`
    block or either `pool.go`'s `MaxConns`/`StatementTimeout` constants.
+10. 0020 (migrations bypass PgBouncer) — a fleet-wide production-blocking
+    bug fix, ported from order-management's reference (PR #115, ADR 0029),
+    read whenever touching `cmd/labor/main.go`'s `buildPersistence`,
+    `cmd/mcp/main.go`'s `buildAdapters`, or
+    `charts/labor-performance/values.yaml`'s `database:` block — directly
+    depends on 0019's HPA existing to matter (an HPA scale-out is the
+    concrete trigger this ADR fixes).
 
 ## Proposing a new ADR
 
