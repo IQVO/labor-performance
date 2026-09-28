@@ -77,6 +77,7 @@ Typos, broken links and formatting are of course fair game.
 | [0017](./0017-kafka-dlq-and-graceful-shutdown.md) | Kafka consumer dead-letter queue and graceful shutdown hardening | Accepted |
 | [0018](./0018-kafka-writer-hash-balancer.md) | Key-aware Hash balancer on every outbound Kafka writer | Accepted |
 | [0019](./0019-horizontal-autoscaling-and-pgxpool-tuning.md) | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted |
+| [0020](./0020-migrations-direct-postgres-connection.md) | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted |
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.
