@@ -242,62 +242,80 @@ func TestGetLaborStandard(t *testing.T) {
 	}
 }
 
+// utilizationCase is one row of TestGetTaskTypeUtilization's table.
+type utilizationCase struct {
+	name     string
+	taskType string
+	wantErr  bool
+	assert   func(t *testing.T, out utilizationDTO)
+}
+
 func TestGetTaskTypeUtilization(t *testing.T) {
-	tests := []struct {
-		name     string
-		taskType string
-		wantErr  bool
-		assert   func(t *testing.T, out utilizationDTO)
-	}{
-		{"empty taskType rejected", "", true, nil},
-		{"invalid taskType rejected", "NOPE", true, nil},
+	tests := []utilizationCase{
+		{name: "empty taskType rejected", taskType: "", wantErr: true},
+		{name: "invalid taskType rejected", taskType: "NOPE", wantErr: true},
 		{
 			name:     "never-observed task type still returns successfully",
 			taskType: "SLAM",
-			assert: func(t *testing.T, out utilizationDTO) {
-				if out.TaskType != "SLAM" || out.TaskSeconds != 0 || out.IdleSeconds != 0 {
-					t.Fatalf("expected zero-count SLAM utilization, got %+v", out)
-				}
-				if out.UtilizationPct != nil {
-					t.Fatalf("UtilizationPct = %v, want nil for a never-observed task type", *out.UtilizationPct)
-				}
-			},
+			assert:   assertUtilizationNeverObserved,
 		},
 		{
 			name:     "utilization computed from real recorded rows",
 			taskType: "PICK",
-			assert: func(t *testing.T, out utilizationDTO) {
-				if out.TaskType != "PICK" {
-					t.Fatalf("unexpected PICK utilization %+v", out)
-				}
-				if out.TaskSeconds != 60 || out.IdleSeconds != 70 {
-					t.Fatalf("unexpected task/idle seconds %+v", out)
-				}
-				if out.UtilizationPct == nil {
-					t.Fatal("expected a non-nil utilizationPct")
-				}
-			},
+			assert:   assertUtilizationFromRecordedRows,
 		},
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t)
-			h.mustRecordTaskPerformance("evt-1", "task-1", "assoc-1", shared.Pick, 30, base.Add(30*time.Second))
-			h.mustRecordTaskPerformance("evt-2", "task-2", "assoc-1", shared.Pick, 30,
-				base.Add(30*time.Second).Add(70*time.Second).Add(30*time.Second))
+		t.Run(tc.name, func(t *testing.T) { runUtilizationCase(t, tc) })
+	}
+}
 
-			out, err := h.deps.getTaskTypeUtilization(h.ctx(), taskTypeUtilizationInput{TaskType: tc.taskType, WindowSeconds: 7200})
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			tc.assert(t, out)
-		})
+// runUtilizationCase seeds two real PICK rows and exercises
+// getTaskTypeUtilization for the case's task type.
+func runUtilizationCase(t *testing.T, tc utilizationCase) {
+	t.Helper()
+	h := newHarness(t)
+	h.mustRecordTaskPerformance("evt-1", "task-1", "assoc-1", shared.Pick, 30, base.Add(30*time.Second))
+	h.mustRecordTaskPerformance("evt-2", "task-2", "assoc-1", shared.Pick, 30,
+		base.Add(30*time.Second).Add(70*time.Second).Add(30*time.Second))
+
+	out, err := h.deps.getTaskTypeUtilization(h.ctx(), taskTypeUtilizationInput{TaskType: tc.taskType, WindowSeconds: 7200})
+	if tc.wantErr {
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tc.assert(t, out)
+}
+
+// assertUtilizationNeverObserved pins the zero-count, nil-mean shape for a
+// task type with no rows.
+func assertUtilizationNeverObserved(t *testing.T, out utilizationDTO) {
+	t.Helper()
+	if out.TaskType != "SLAM" || out.TaskSeconds != 0 || out.IdleSeconds != 0 {
+		t.Fatalf("expected zero-count SLAM utilization, got %+v", out)
+	}
+	if out.UtilizationPct != nil {
+		t.Fatalf("UtilizationPct = %v, want nil for a never-observed task type", *out.UtilizationPct)
+	}
+}
+
+// assertUtilizationFromRecordedRows pins utilization computed from two real
+// recorded rows.
+func assertUtilizationFromRecordedRows(t *testing.T, out utilizationDTO) {
+	t.Helper()
+	if out.TaskType != "PICK" {
+		t.Fatalf("unexpected PICK utilization %+v", out)
+	}
+	if out.TaskSeconds != 60 || out.IdleSeconds != 70 {
+		t.Fatalf("unexpected task/idle seconds %+v", out)
+	}
+	if out.UtilizationPct == nil {
+		t.Fatal("expected a non-nil utilizationPct")
 	}
 }

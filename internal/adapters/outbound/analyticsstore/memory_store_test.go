@@ -185,50 +185,61 @@ func TestMemoryStoreQueryFilters(t *testing.T) {
 		TaskType: "PICK", ActualSeconds: 10, CompletedAt: at(11, 0), OccurredAt: at(11, 0),
 	})
 
-	t.Run("task type filter", func(t *testing.T) {
-		rep, err := s.Query(context.Background(), report.ReportQuery{From: at(0, 0), To: at(23, 0), TaskType: "PICK"})
-		if err != nil {
-			t.Fatalf("Query: %v", err)
-		}
-		if len(rep.Rows) != 2 {
-			t.Fatalf("got %d rows, want 2", len(rep.Rows))
-		}
-		for _, row := range rep.Rows {
-			if row.Key.TaskType != "PICK" {
-				t.Errorf("row leaked through the filter: %+v", row.Key)
-			}
-		}
-	})
+	t.Run("task type filter", func(t *testing.T) { assertQueryFiltersByTaskType(t, s) })
+	t.Run("window is from-inclusive and to-exclusive", func(t *testing.T) { assertQueryWindowHalfOpen(t, s) })
+	t.Run("an empty window yields an empty but non-nil report", func(t *testing.T) { assertQueryEmptyWindow(t, s) })
+}
 
-	t.Run("window is from-inclusive and to-exclusive", func(t *testing.T) {
-		// [09:00, 11:00) must include the 09:00 buckets and exclude the
-		// 11:00 one.
-		rep, err := s.Query(context.Background(), report.ReportQuery{From: at(9, 0), To: at(11, 0)})
-		if err != nil {
-			t.Fatalf("Query: %v", err)
+// assertQueryFiltersByTaskType pins the exact-match TaskType filter.
+func assertQueryFiltersByTaskType(t *testing.T, s *MemoryStore) {
+	t.Helper()
+	rep, err := s.Query(context.Background(), report.ReportQuery{From: at(0, 0), To: at(23, 0), TaskType: "PICK"})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(rep.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rep.Rows))
+	}
+	for _, row := range rep.Rows {
+		if row.Key.TaskType != "PICK" {
+			t.Errorf("row leaked through the filter: %+v", row.Key)
 		}
-		if len(rep.Rows) != 2 {
-			t.Fatalf("got %d rows, want 2 (both 09:00 buckets, not the 11:00 one): %+v", len(rep.Rows), rep.Rows)
-		}
-		for _, row := range rep.Rows {
-			if !row.Key.HourBucket.Equal(at(9, 0)) {
-				t.Errorf("row outside the half-open window: %+v", row.Key)
-			}
-		}
-	})
+	}
+}
 
-	t.Run("an empty window yields an empty but non-nil report", func(t *testing.T) {
-		rep, err := s.Query(context.Background(), report.ReportQuery{From: at(20, 0), To: at(22, 0)})
-		if err != nil {
-			t.Fatalf("Query: %v", err)
+// assertQueryWindowHalfOpen pins the half-open window: [from, to).
+func assertQueryWindowHalfOpen(t *testing.T, s *MemoryStore) {
+	t.Helper()
+	// [09:00, 11:00) must include the 09:00 buckets and exclude the
+	// 11:00 one.
+	rep, err := s.Query(context.Background(), report.ReportQuery{From: at(9, 0), To: at(11, 0)})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(rep.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2 (both 09:00 buckets, not the 11:00 one): %+v", len(rep.Rows), rep.Rows)
+	}
+	for _, row := range rep.Rows {
+		if !row.Key.HourBucket.Equal(at(9, 0)) {
+			t.Errorf("row outside the half-open window: %+v", row.Key)
 		}
-		if rep.Rows == nil || len(rep.Rows) != 0 {
-			t.Errorf("Rows = %+v, want an empty non-nil slice", rep.Rows)
-		}
-		if rep.Totals.MeanEfficiencyPct != nil || rep.Totals.MeanActualSeconds != nil {
-			t.Errorf("Totals = %+v, want nil means for an empty window", rep.Totals)
-		}
-	})
+	}
+}
+
+// assertQueryEmptyWindow pins an empty window's report shape: non-nil
+// empty rows and nil means.
+func assertQueryEmptyWindow(t *testing.T, s *MemoryStore) {
+	t.Helper()
+	rep, err := s.Query(context.Background(), report.ReportQuery{From: at(20, 0), To: at(22, 0)})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if rep.Rows == nil || len(rep.Rows) != 0 {
+		t.Errorf("Rows = %+v, want an empty non-nil slice", rep.Rows)
+	}
+	if rep.Totals.MeanEfficiencyPct != nil || rep.Totals.MeanActualSeconds != nil {
+		t.Errorf("Totals = %+v, want nil means for an empty window", rep.Totals)
+	}
 }
 
 func TestMemoryStoreFreshnessLag(t *testing.T) {

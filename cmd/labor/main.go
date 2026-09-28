@@ -48,10 +48,7 @@ func run() error {
 	slog.SetDefault(logger)
 
 	ctx := context.Background()
-
-	serviceName := getenv("OTEL_SERVICE_NAME", inboundhttp.DefaultServiceName)
-	otlpEndpoint := getenv("OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.DefaultOTLPEndpoint)
-	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName, serviceVersion(), otlpEndpoint)
+	serviceName, shutdownTelemetry, err := setupTelemetry(ctx, logger)
 	if err != nil {
 		return err
 	}
@@ -62,12 +59,6 @@ func run() error {
 			logger.Warn("telemetry shutdown did not flush cleanly", "error", err)
 		}
 	}()
-	logger.Info("telemetry configured",
-		"service_name", serviceName,
-		"service_version", serviceVersion(),
-		"environment", telemetry.Environment(),
-		"otlp_endpoint", otlpEndpoint,
-	)
 
 	httpAddr := getenv("HTTP_ADDR", ":8080")
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -142,6 +133,36 @@ func run() error {
 	kafkaBrokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
 	kafkaGroupID := getenv("KAFKA_CONSUMER_GROUP", "labor-performance")
 	consumer := inboundkafka.NewConsumer(kafkaBrokers, kafkaGroupID, recordTaskPerformance, logger)
+
+	return serve(ctx, httpServer, consumer, relay, kafkaBrokers, kafkaGroupID, logger, readiness)
+}
+
+// setupTelemetry configures OTel once at boot and reports the resolved
+// service name (the HTTP router needs it for its metrics label) plus the
+// shutdown flush, which the caller defers until after every component has
+// drained.
+func setupTelemetry(ctx context.Context, logger *slog.Logger) (string, func(context.Context) error, error) {
+	serviceName := getenv("OTEL_SERVICE_NAME", inboundhttp.DefaultServiceName)
+	otlpEndpoint := getenv("OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.DefaultOTLPEndpoint)
+	shutdown, err := telemetry.Setup(ctx, serviceName, serviceVersion(), otlpEndpoint)
+	if err != nil {
+		return "", nil, err
+	}
+	logger.Info("telemetry configured",
+		"service_name", serviceName,
+		"service_version", serviceVersion(),
+		"environment", telemetry.Environment(),
+		"otlp_endpoint", otlpEndpoint,
+	)
+	return serviceName, shutdown, nil
+}
+
+// serve runs the wired components until a signal arrives or one of them
+// fails: the HTTP server, the fulfillment-events consumer, and (when a
+// Postgres-backed outbox relay is configured) the relay draining committed
+// events onto Kafka. On shutdown it drains them in order — consumer, HTTP
+// server, relay — and returns the first component error, if any.
+func serve(ctx context.Context, httpServer *http.Server, consumer *inboundkafka.Consumer, relay *postgres.OutboxRelay, kafkaBrokers []string, kafkaGroupID string, logger *slog.Logger, readiness *inboundhttp.Readiness) error {
 	defer func() {
 		if err := consumer.Close(); err != nil {
 			logger.Error("error closing kafka consumer", "error", err)
@@ -161,7 +182,7 @@ func run() error {
 
 	errCh := make(chan error, 3)
 	go func() {
-		logger.Info("http server listening", "addr", httpAddr)
+		logger.Info("http server listening", "addr", httpServer.Addr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -233,7 +254,7 @@ func run() error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	err = httpServer.Shutdown(shutdownCtx)
+	err := httpServer.Shutdown(shutdownCtx)
 
 	// Let the relay finish its in-flight pass so an event committed by a
 	// request (or a consumed message) that completed just before shutdown

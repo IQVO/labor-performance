@@ -237,79 +237,93 @@ type scorecardBody struct {
 }
 
 func TestGetAssociateScorecard(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		e := newTestEnv(t, now)
-		e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
-			KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: "PICK",
-			ActualSeconds: 50, CompletedAt: now,
-		})
-
-		rec := e.do(t, http.MethodGet, "/associates/assoc-1/scorecard", "")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-		}
-		var body scorecardBody
-		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if body.TaskCount != 1 || body.AssociateId != "assoc-1" {
-			t.Fatalf("body = %+v", body)
-		}
-		if body.Trend != "INSUFFICIENT_DATA" {
-			t.Fatalf("Trend = %q, want INSUFFICIENT_DATA with only 1 scored task", body.Trend)
-		}
-		if body.CoachingFlag {
-			t.Fatal("CoachingFlag must be false with only 1 scored task")
-		}
-	})
-
+	t.Run("success", func(t *testing.T) { testScorecardSingleTask(t) })
 	t.Run("success: coaching flag set after 3 consecutive below-floor tasks", func(t *testing.T) {
-		e := newTestEnv(t, now)
-		// Define a real standard through the actual REST endpoint (not
-		// the backdoor), so this exercises both public write surfaces
-		// end to end.
-		defineRec := e.do(t, http.MethodPost, "/standards", `{"taskType":"PICK","expectedSeconds":100}`)
-		if defineRec.Code != http.StatusCreated {
-			t.Fatalf("DefineStandard status = %d, want 201 (body: %s)", defineRec.Code, defineRec.Body.String())
-		}
+		testScorecardCoachingFlag(t)
+	})
+	t.Run("error: never seen this associate", func(t *testing.T) { testScorecardUnknownAssociate(t) })
+}
 
-		for i := range 3 {
-			e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
-				KafkaEventId: fmt.Sprintf("evt-%d", i), TaskId: fmt.Sprintf("task-%d", i), AssociateId: "assoc-flagged", TaskType: "PICK",
-				ActualSeconds: 200, CompletedAt: now.Add(time.Duration(i) * time.Hour), // 50% efficiency, well below the 85% floor
-			})
-		}
-
-		rec := e.do(t, http.MethodGet, "/associates/assoc-flagged/scorecard", "")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-		}
-		var body scorecardBody
-		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if !body.CoachingFlag {
-			t.Fatalf("CoachingFlag = false, want true (body: %+v)", body)
-		}
-		if body.Trend != "STABLE" && body.Trend != "DECLINING" {
-			// 3 tasks all at exactly 50% has zero variance from their
-			// own mean, so ClassifyTrend compares recentMean (50) to
-			// baselineMean (also 50, since these are the only rows) —
-			// STABLE is the correct, expected outcome here; DECLINING
-			// is accepted too in case a future baseline-window change
-			// alters which rows count toward the baseline.
-			t.Fatalf("Trend = %q, want STABLE (or DECLINING)", body.Trend)
-		}
+// testScorecardSingleTask pins the one-task scorecard: INSUFFICIENT_DATA
+// trend and no coaching flag.
+func testScorecardSingleTask(t *testing.T) {
+	t.Helper()
+	e := newTestEnv(t, now)
+	e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: "PICK",
+		ActualSeconds: 50, CompletedAt: now,
 	})
 
-	t.Run("error: never seen this associate", func(t *testing.T) {
-		e := newTestEnv(t, now)
-		rec := e.do(t, http.MethodGet, "/associates/assoc-unknown/scorecard", "")
-		p := assertProblem(t, rec, http.StatusNotFound)
-		if !strings.HasSuffix(p.Type, "associate-not-found") {
-			t.Fatalf("problem.type = %q", p.Type)
-		}
-	})
+	rec := e.do(t, http.MethodGet, "/associates/assoc-1/scorecard", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body scorecardBody
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.TaskCount != 1 || body.AssociateId != "assoc-1" {
+		t.Fatalf("body = %+v", body)
+	}
+	if body.Trend != "INSUFFICIENT_DATA" {
+		t.Fatalf("Trend = %q, want INSUFFICIENT_DATA with only 1 scored task", body.Trend)
+	}
+	if body.CoachingFlag {
+		t.Fatal("CoachingFlag must be false with only 1 scored task")
+	}
+}
+
+// testScorecardCoachingFlag pins the coaching flag after 3 consecutive
+// below-floor tasks, defining the standard through the real REST endpoint.
+func testScorecardCoachingFlag(t *testing.T) {
+	t.Helper()
+	e := newTestEnv(t, now)
+	// Define a real standard through the actual REST endpoint (not
+	// the backdoor), so this exercises both public write surfaces
+	// end to end.
+	defineRec := e.do(t, http.MethodPost, "/standards", `{"taskType":"PICK","expectedSeconds":100}`)
+	if defineRec.Code != http.StatusCreated {
+		t.Fatalf("DefineStandard status = %d, want 201 (body: %s)", defineRec.Code, defineRec.Body.String())
+	}
+
+	for i := range 3 {
+		e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
+			KafkaEventId: fmt.Sprintf("evt-%d", i), TaskId: fmt.Sprintf("task-%d", i), AssociateId: "assoc-flagged", TaskType: "PICK",
+			ActualSeconds: 200, CompletedAt: now.Add(time.Duration(i) * time.Hour), // 50% efficiency, well below the 85% floor
+		})
+	}
+
+	rec := e.do(t, http.MethodGet, "/associates/assoc-flagged/scorecard", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body scorecardBody
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.CoachingFlag {
+		t.Fatalf("CoachingFlag = false, want true (body: %+v)", body)
+	}
+	if body.Trend != "STABLE" && body.Trend != "DECLINING" {
+		// 3 tasks all at exactly 50% has zero variance from their
+		// own mean, so ClassifyTrend compares recentMean (50) to
+		// baselineMean (also 50, since these are the only rows) —
+		// STABLE is the correct, expected outcome here; DECLINING
+		// is accepted too in case a future baseline-window change
+		// alters which rows count toward the baseline.
+		t.Fatalf("Trend = %q, want STABLE (or DECLINING)", body.Trend)
+	}
+}
+
+// testScorecardUnknownAssociate pins the associate-not-found problem.
+func testScorecardUnknownAssociate(t *testing.T) {
+	t.Helper()
+	e := newTestEnv(t, now)
+	rec := e.do(t, http.MethodGet, "/associates/assoc-unknown/scorecard", "")
+	p := assertProblem(t, rec, http.StatusNotFound)
+	if !strings.HasSuffix(p.Type, "associate-not-found") {
+		t.Fatalf("problem.type = %q", p.Type)
+	}
 }
 
 type taskTypePerformanceBody struct {
@@ -403,60 +417,13 @@ type utilizationBody struct {
 
 func TestGetTaskTypeUtilization(t *testing.T) {
 	t.Run("success: computed from real recorded rows", func(t *testing.T) {
-		e := newTestEnv(t, now)
-		e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
-			KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: "PICK",
-			ActualSeconds: 30, CompletedAt: now.Add(30 * time.Second),
-		})
-		e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
-			KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: "PICK",
-			ActualSeconds: 30, CompletedAt: now.Add(30 * time.Second).Add(70 * time.Second).Add(30 * time.Second),
-		})
-
-		rec := e.do(t, http.MethodGet, "/task-types/PICK/utilization?window=2h", "")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-		}
-		var body utilizationBody
-		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if body.TaskSeconds != 60 || body.IdleSeconds != 70 {
-			t.Fatalf("body = %+v", body)
-		}
-		if body.UtilizationPct == nil {
-			t.Fatal("UtilizationPct must be non-nil")
-		}
+		testTaskTypeUtilizationFromRecordedRows(t)
 	})
-
 	t.Run("success: never-observed task type returns zero, not an error", func(t *testing.T) {
-		e := newTestEnv(t, now)
-		rec := e.do(t, http.MethodGet, "/task-types/SLAM/utilization", "")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-		}
-		var body utilizationBody
-		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if body.TaskSeconds != 0 || body.IdleSeconds != 0 {
-			t.Fatalf("body = %+v", body)
-		}
-		if body.UtilizationPct != nil {
-			t.Fatalf("UtilizationPct = %v, want nil", *body.UtilizationPct)
-		}
-		if body.WindowSeconds != int64((time.Hour).Seconds()) {
-			t.Fatalf("WindowSeconds = %d, want the 1h default (no window param)", body.WindowSeconds)
-		}
+		testTaskTypeUtilizationNeverObserved(t)
 	})
-
 	t.Run("error: unknown task type in path", func(t *testing.T) {
-		e := newTestEnv(t, now)
-		rec := e.do(t, http.MethodGet, "/task-types/WALK/utilization", "")
-		p := assertProblem(t, rec, http.StatusBadRequest)
-		if !strings.HasSuffix(p.Type, "unknown-task-type") {
-			t.Fatalf("problem.type = %q", p.Type)
-		}
+		testTaskTypeUtilizationUnknownTaskType(t)
 	})
 
 	// Schemathesis merges an operation's declared query parameters into a
@@ -467,19 +434,91 @@ func TestGetTaskTypeUtilization(t *testing.T) {
 	// scripts/contract-test.sh, which excludes this operation because of
 	// that unexpressible assumption.
 	t.Run("success: unknown query parameters are ignored, not rejected", func(t *testing.T) {
-		e := newTestEnv(t, now)
-		rec := e.do(t, http.MethodGet, "/task-types/PICK/utilization?window=30m&debug=1&foo=bar", "")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
-		}
-		var body utilizationBody
-		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if body.WindowSeconds != int64((30 * time.Minute).Seconds()) {
-			t.Fatalf("WindowSeconds = %d, want the requested 30m window (unknown params must not affect it)", body.WindowSeconds)
-		}
+		testTaskTypeUtilizationIgnoresUnknownQueryParams(t)
 	})
+}
+
+// testTaskTypeUtilizationFromRecordedRows pins utilization computed from two
+// real recorded rows through the backdoor.
+func testTaskTypeUtilizationFromRecordedRows(t *testing.T) {
+	t.Helper()
+	e := newTestEnv(t, now)
+	e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: "PICK",
+		ActualSeconds: 30, CompletedAt: now.Add(30 * time.Second),
+	})
+	e.recordViaBackdoor(t, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-2", TaskId: "task-2", AssociateId: "assoc-1", TaskType: "PICK",
+		ActualSeconds: 30, CompletedAt: now.Add(30 * time.Second).Add(70 * time.Second).Add(30 * time.Second),
+	})
+
+	rec := e.do(t, http.MethodGet, "/task-types/PICK/utilization?window=2h", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body utilizationBody
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.TaskSeconds != 60 || body.IdleSeconds != 70 {
+		t.Fatalf("body = %+v", body)
+	}
+	if body.UtilizationPct == nil {
+		t.Fatal("UtilizationPct must be non-nil")
+	}
+}
+
+// testTaskTypeUtilizationNeverObserved pins the zero-count, nil-mean shape
+// for a task type with no rows.
+func testTaskTypeUtilizationNeverObserved(t *testing.T) {
+	t.Helper()
+	e := newTestEnv(t, now)
+	rec := e.do(t, http.MethodGet, "/task-types/SLAM/utilization", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body utilizationBody
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.TaskSeconds != 0 || body.IdleSeconds != 0 {
+		t.Fatalf("body = %+v", body)
+	}
+	if body.UtilizationPct != nil {
+		t.Fatalf("UtilizationPct = %v, want nil", *body.UtilizationPct)
+	}
+	if body.WindowSeconds != int64((time.Hour).Seconds()) {
+		t.Fatalf("WindowSeconds = %d, want the 1h default (no window param)", body.WindowSeconds)
+	}
+}
+
+// testTaskTypeUtilizationUnknownTaskType pins the unknown-task-type problem.
+func testTaskTypeUtilizationUnknownTaskType(t *testing.T) {
+	t.Helper()
+	e := newTestEnv(t, now)
+	rec := e.do(t, http.MethodGet, "/task-types/WALK/utilization", "")
+	p := assertProblem(t, rec, http.StatusBadRequest)
+	if !strings.HasSuffix(p.Type, "unknown-task-type") {
+		t.Fatalf("problem.type = %q", p.Type)
+	}
+}
+
+// testTaskTypeUtilizationIgnoresUnknownQueryParams pins the lenient query
+// contract: unknown query parameters are ignored, not rejected.
+func testTaskTypeUtilizationIgnoresUnknownQueryParams(t *testing.T) {
+	t.Helper()
+	e := newTestEnv(t, now)
+	rec := e.do(t, http.MethodGet, "/task-types/PICK/utilization?window=30m&debug=1&foo=bar", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+	var body utilizationBody
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.WindowSeconds != int64((30 * time.Minute).Seconds()) {
+		t.Fatalf("WindowSeconds = %d, want the requested 30m window (unknown params must not affect it)", body.WindowSeconds)
+	}
 }
 
 func TestGetAssociateUtilization(t *testing.T) {

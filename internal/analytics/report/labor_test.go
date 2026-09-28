@@ -246,11 +246,20 @@ func TestBuildBreakdownAndTotals(t *testing.T) {
 	}
 	// Sorted by TaskType: "PICK" < "UNCLASSIFIED".
 	pick, unclassified := got.ByTaskType[0], got.ByTaskType[1]
-
 	if pick.TaskType != "PICK" || unclassified.TaskType != UnclassifiedTaskType {
 		t.Fatalf("breakdown not sorted by task type: %q then %q", pick.TaskType, unclassified.TaskType)
 	}
 
+	assertPickBreakdownBar(t, pick)
+	assertUnclassifiedBreakdownBar(t, unclassified)
+	assertBreakdownTotals(t, got.Totals)
+}
+
+// assertPickBreakdownBar pins the PICK bar: counts merged across both
+// buckets, means recomputed from the summed raw counters, and the
+// standard-lifecycle events carried through.
+func assertPickBreakdownBar(t *testing.T, pick TaskTypeBar) {
+	t.Helper()
 	if pick.TasksRecorded != 4 || pick.TasksScored != 3 || pick.TasksUnscored != 1 {
 		t.Errorf("PICK counts = recorded %d / scored %d / unscored %d, want 4/3/1",
 			pick.TasksRecorded, pick.TasksScored, pick.TasksUnscored)
@@ -264,10 +273,13 @@ func TestBuildBreakdownAndTotals(t *testing.T) {
 	if pick.StandardsDefined != 1 || pick.StandardsRevised != 1 {
 		t.Errorf("PICK standards = %d defined / %d revised, want 1/1", pick.StandardsDefined, pick.StandardsRevised)
 	}
+}
 
-	// The unclassified bar is a real bar with a real count and NO
-	// fabricated means — the case the whole nil-not-zero discipline
-	// exists for.
+// assertUnclassifiedBreakdownBar pins the unclassified bar: a real bar
+// with a real count and NO fabricated means — the case the whole
+// nil-not-zero discipline exists for.
+func assertUnclassifiedBreakdownBar(t *testing.T, unclassified TaskTypeBar) {
+	t.Helper()
 	if unclassified.TasksRecorded != 5 || unclassified.TasksScored != 0 || unclassified.TasksUnscored != 5 {
 		t.Errorf("UNCLASSIFIED counts = %d/%d/%d, want 5/0/5",
 			unclassified.TasksRecorded, unclassified.TasksScored, unclassified.TasksUnscored)
@@ -278,17 +290,22 @@ func TestBuildBreakdownAndTotals(t *testing.T) {
 	if unclassified.MeanActualSeconds != nil {
 		t.Errorf("UNCLASSIFIED MeanActualSeconds = %v, want nil", *unclassified.MeanActualSeconds)
 	}
+}
 
-	if got.Totals.TasksRecorded != 9 || got.Totals.TasksScored != 3 || got.Totals.TasksUnscored != 6 {
-		t.Errorf("Totals = %+v, want recorded 9 / scored 3 / unscored 6", got.Totals)
+// assertBreakdownTotals pins the window headline: every task counted, and
+// the means averaged over the SCORED subset across every task type.
+func assertBreakdownTotals(t *testing.T, totals Totals) {
+	t.Helper()
+	if totals.TasksRecorded != 9 || totals.TasksScored != 3 || totals.TasksUnscored != 6 {
+		t.Errorf("Totals = %+v, want recorded 9 / scored 3 / unscored 6", totals)
 	}
 	// Totals average the SCORED subset across every task type — the
 	// unscorable rows must not drag the mean toward zero.
-	if !eq(got.Totals.MeanEfficiencyPct, ptr(100)) {
-		t.Errorf("Totals.MeanEfficiencyPct = %s, want 100", fmtPtr(got.Totals.MeanEfficiencyPct))
+	if !eq(totals.MeanEfficiencyPct, ptr(100)) {
+		t.Errorf("Totals.MeanEfficiencyPct = %s, want 100", fmtPtr(totals.MeanEfficiencyPct))
 	}
-	if !eq(got.Totals.MeanActualSeconds, ptr(45)) {
-		t.Errorf("Totals.MeanActualSeconds = %s, want 45", fmtPtr(got.Totals.MeanActualSeconds))
+	if !eq(totals.MeanActualSeconds, ptr(45)) {
+		t.Errorf("Totals.MeanActualSeconds = %s, want 45", fmtPtr(totals.MeanActualSeconds))
 	}
 }
 
