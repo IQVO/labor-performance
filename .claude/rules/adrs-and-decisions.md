@@ -1,4 +1,4 @@
-# ADR index (0001–0018)
+# ADR index (0001–0019)
 
 Full records live in `docs/docs/adr/` (Nygard format, Docusaurus-rendered
 at `/docs/adr`). This is a summary index — read the actual ADR before
@@ -24,6 +24,7 @@ relying on a detail not captured here.
 | 0016 | Transactional Idempotency-Key middleware for POST /standards | Accepted | Route-scoped, transactional Idempotency-Key HTTP middleware for `POST /standards`, this service's one true resource-creation endpoint; reuses the outbox's tx-in-context mechanism (`internal/pgtx`). Ported from order-management's reference (PR #105, ADR 0023). |
 | 0017 | Kafka consumer dead-letter queue and graceful shutdown hardening | Accepted | `Consumer.handleMessage` retries `handleFulfillmentEvent` in-process (cenkalti/backoff/v4, up to 3 attempts) then dead-letters an exhausted/poisoned message to `warehouse.fulfillment.events.dlq`, committing the offset so one poison message never blocks the partition. Graceful shutdown gains a readiness-flip-first sequence backing a new `GET /readyz` distinct from `GET /healthz`. Ported from order-management's DLQ/shutdown design (PR #107, ADR 0025) — this service has no sibling-context outbound calls, so no circuit breaker work applies here. |
 | 0018 | Key-aware Hash balancer on every outbound Kafka writer | Accepted | Every writer in `internal/adapters/outbound/kafka` (`IntegrationPublisher`, `AnalyticsPublisher`, `RelaySink`) used `&kafkago.LeastBytes{}`, which ignores `Message.Key` for partition routing entirely — `Message.Key` (AssociateId / TaskType) was always set correctly but had no effect on partition placement. Switched every writer's `Balancer` to `&kafkago.Hash{}`. Same fleet-wide fix as order-management PR #111, closing the ordering gap warehouse-infra PR #42's 1→8 partition scaleup exposed. Proven via a real-broker Testcontainers test on an 8-partition topic. |
+| 0019 | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted | `autoscaling.<api\|projector\|reports\|frontend>` HPA blocks (all default-disabled) in `charts/labor-performance/values.yaml`, one `HorizontalPodAutoscaler` per independently-assessed workload; `mcp` deliberately excluded (in-memory MCP session state, no sticky routing). `postgres.MaxConns=10`/`StatementTimeout=5s` (OLTP, via PgBouncer) and `analyticsstore.MaxConns=5`/`ReportsMaxConns=5`/`StatementTimeout=10s`/`ReportsStatementTimeout=15s` (analytics, direct to Postgres). Ported from order-management's reference (PR #110, ADR 0026); mirrors warehouse-infra PR #43's PgBouncer OLTP/analytics DSN split as-is. |
 
 ## Reading order for a newcomer
 
@@ -45,6 +46,10 @@ relying on a detail not captured here.
 8. 0018 (Kafka writer Hash balancer) — a fleet-wide producer-routing
    correctness fix, read whenever touching any `kafkago.Writer`
    construction in `internal/adapters/outbound/kafka`.
+9. 0019 (HPA + pgxpool tuning) — a fleet-wide scalability port from
+   order-management's reference (PR #110, ADR 0026), read whenever
+   touching `charts/labor-performance/values.yaml`'s `autoscaling:`
+   block or either `pool.go`'s `MaxConns`/`StatementTimeout` constants.
 
 ## Proposing a new ADR
 

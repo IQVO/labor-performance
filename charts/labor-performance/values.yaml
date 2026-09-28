@@ -71,11 +71,91 @@ resources:
     cpu: 100m
     memory: 128Mi
 
+# HorizontalPodAutoscaler (autoscaling/v2) per independently-assessed
+# workload, mirroring order-management's Phase 3 reference (PR #110,
+# ADR-0026) — see docs/docs/adr/0019-horizontal-autoscaling-and-pgxpool-tuning.md
+# for the full per-workload reasoning. Every autoscaling.<x>.enabled value
+# defaults to false: this chart change makes per-workload HPA possible
+# and verified-correct, but does not turn any of it on. Each guarded
+# Deployment template renders WITHOUT a `replicas:` field once its own
+# autoscaling.<x>.enabled flips true, so the HPA controller is the only
+# writer of spec.replicas and never fights a static chart value on
+# `helm upgrade`.
 autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 5
-  targetCPUUtilizationPercentage: 80
+  # cmd/labor (this Deployment, component=api): stateless OLTP HTTP +
+  # Kafka consumer of warehouse.fulfillment.events. Its Kafka consumer
+  # group (config.kafkaConsumerGroup, default "labor-performance") is a
+  # STABLE, shared group with no per-instance uniqueness -- the fleet's
+  # normal horizontally-scalable pattern, N replicas share partitions via
+  # ordinary Kafka group rebalancing (same shape as order-management's
+  # RepromiseConsumer under ADR-0018). The outbox relay
+  # (postgres.OutboxRelay) runs per-process against each replica's own
+  # unpublished rows, safe at N>1 by construction (each row is claimed
+  # and published at most once via its own row-level state, not a
+  # per-process cache). Nothing here breaks at N>1. max 4 / target 70%
+  # CPU per the plan.
+  api:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  # cmd/labor-projector: the ONLY writer of the analytical database
+  # (ADR-0007). Its Kafka consumer group (AnalyticsConsumerGroup ==
+  # "labor-performance-analytics") is also a STABLE, shared group with no
+  # per-instance uniqueness (internal/adapters/inbound/kafka/
+  # analytics_consumer.go) -- so N replicas legitimately share the
+  # analytics topic's partitions via normal rebalancing, the same safe
+  # shape as api's consumer group. Every write is idempotent on event_id
+  # via ProcessedEvents.MarkProcessed, so correctness does not regress at
+  # N>1. Capped at 2, not left at api's 4, for the same reasons
+  # order-management's projector was: the topic is keyed by TaskType
+  # (internal/adapters/outbound/kafka/analytics_publisher.go's
+  # marshalData), so ordering is only guaranteed per-partition, and a
+  # wider fan-out buys little for a lightweight idempotent-upsert
+  # workload.
+  projector:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 2
+    targetCPUUtilizationPercentage: 70
+  # cmd/labor-reports: stateless read-only REST reader over its own
+  # read-only pgxpool (analyticsstore.NewReadOnlyPool) -- no in-memory
+  # state, no Kafka consumption. Same treatment as api.
+  reports:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+  # frontend (web/, nginx-unprivileged serving the built labor_mfe SPA
+  # bundle): pure static-asset serving, no server-side session or
+  # per-request state whatsoever -- the most trivially horizontally
+  # scalable workload in this chart.
+  frontend:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 70
+
+# --- mcp: deliberately NOT HPA-scalable (no autoscaling.mcp block here) ---
+# cmd/mcp wraps the github.com/modelcontextprotocol/go-sdk
+# StreamableHTTPHandler (internal/adapters/inbound/mcp/server.go's
+# mcp.NewStreamableHTTPHandler), which keeps per-process, in-memory
+# session state keyed by the MCP protocol's own Mcp-Session-Id header --
+# a real multi-request session, not just a TCP/HTTP connection.
+# charts/labor-performance/templates/mcp-service.yaml is a plain
+# ClusterIP Service with no sessionAffinity configured, so under >1
+# replica a second request carrying the same Mcp-Session-Id (e.g. a
+# tools/call following an earlier initialize) could land on a different
+# pod than the one that created the session, which has never heard of it
+# and would reject or silently start a new one. Fixing it for real needs
+# either sessionAffinity: ClientIP (a partial mitigation only) or wiring
+# the SDK's StreamableHTTPOptions.EventStore to a shared/external session
+# store -- a real code change, out of scope for this chart-and-pool-
+# tuning PR. mcp.replicaCount therefore stays a plain, manually-set value
+# (see mcp: below); revisit if/when the SDK wiring adopts Stateless mode
+# or an external session store. Ported verbatim from order-management's
+# ADR-0026 reasoning (PR #110), which excluded its own cmd/mcp for the
+# identical reason.
 
 # deployment.environment.name on every span, metric and log this service
 # exports. Set per-cluster (local / staging / production).
