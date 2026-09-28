@@ -43,12 +43,23 @@ type IntegrationPublisher struct {
 // NewIntegrationPublisher constructs an IntegrationPublisher writing to
 // the integration topic on brokers. newID mints each envelope's
 // event_id.
+//
+// Balancer is kafkago.Hash (FNV-1a over Message.Key), not LeastBytes:
+// kafka-go's Writer does not hash Message.Key into a partition decision
+// just because a message carries one — the Balancer alone decides
+// partition placement, and LeastBytes routes purely by cumulative byte
+// volume, ignoring Key entirely. This publisher has always set Key to
+// the event's AssociateId (see integrationData), but that only achieves
+// per-associate partition affinity, and therefore in-order delivery to a
+// single-partition consumer, when the Balancer is itself key-aware. See
+// ADR 0018, order-management PR #111, and warehouse-infra PR #42 (the
+// 1->8 partition scaleup that exposed this).
 func NewIntegrationPublisher(brokers []string, newID func() string) *IntegrationPublisher {
 	return &IntegrationPublisher{
 		Writer: &kafkago.Writer{
 			Addr:                   kafkago.TCP(brokers...),
 			Topic:                  envelope.TopicLaborPerformanceEvents,
-			Balancer:               &kafkago.LeastBytes{},
+			Balancer:               &kafkago.Hash{},
 			AllowAutoTopicCreation: true,
 		},
 		NewID: newID,

@@ -75,6 +75,7 @@ Typos, broken links and formatting are of course fair game.
 | [0015](./0015-optional-travel-component-on-labor-standard.md) | Optional travel-time component on a LaborStandard | Accepted |
 | [0016](./0016-idempotency-key-middleware.md) | Transactional Idempotency-Key middleware for POST /standards | Accepted |
 | [0017](./0017-kafka-dlq-and-graceful-shutdown.md) | Kafka consumer dead-letter queue and graceful shutdown hardening | Accepted |
+| [0018](./0018-kafka-writer-hash-balancer.md) | Key-aware Hash balancer on every outbound Kafka writer | Accepted |
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.
