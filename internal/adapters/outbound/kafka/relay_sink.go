@@ -22,11 +22,18 @@ type RelaySink struct {
 // NewRelaySink constructs a RelaySink over brokers. The writer
 // deliberately has NO Topic: kafka-go rejects a per-message Topic when
 // the Writer also has one, and the relay must set the topic per message.
+//
+// Balancer is kafkago.Hash, matching every other writer in this package
+// (see NewIntegrationPublisher's doc comment): the relay forwards
+// already-encoded messages whose Key was set at Encode time by the
+// outbox path, and LeastBytes would silently ignore that key for
+// partition routing. See ADR 0018, order-management PR #111, and
+// warehouse-infra PR #42.
 func NewRelaySink(brokers []string) *RelaySink {
 	return &RelaySink{
 		Writer: &kafkago.Writer{
 			Addr:                   kafkago.TCP(brokers...),
-			Balancer:               &kafkago.LeastBytes{},
+			Balancer:               &kafkago.Hash{},
 			AllowAutoTopicCreation: true,
 		},
 	}

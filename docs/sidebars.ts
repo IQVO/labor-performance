@@ -53,6 +53,8 @@ const sidebars: SidebarsConfig = {
         'adr/0015-optional-travel-component-on-labor-standard',
         'adr/0016-idempotency-key-middleware',
         'adr/0017-kafka-dlq-and-graceful-shutdown',
+        'adr/0018-kafka-writer-hash-balancer',
+        'adr/0019-horizontal-autoscaling-and-pgxpool-tuning',
       ],
     },
   ],
