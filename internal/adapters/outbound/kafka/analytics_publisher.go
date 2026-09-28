@@ -83,12 +83,19 @@ type AnalyticsPublisher struct {
 
 // NewAnalyticsPublisher constructs an AnalyticsPublisher writing to the
 // analytics topic on brokers. newID mints each envelope's event_id.
+//
+// Balancer is kafkago.Hash, matching IntegrationPublisher's choice (see
+// its doc comment): this publisher already keys every message by
+// TaskType (marshalData), but LeastBytes would have silently discarded
+// that key for partition routing — Hash is what actually turns the key
+// into a same-TaskType-same-partition guarantee. See ADR 0018,
+// order-management PR #111, and warehouse-infra PR #42.
 func NewAnalyticsPublisher(brokers []string, newID func() string) *AnalyticsPublisher {
 	return &AnalyticsPublisher{
 		Writer: &kafkago.Writer{
 			Addr:                   kafkago.TCP(brokers...),
 			Topic:                  envelope.TopicLaborPerformanceAnalytics,
-			Balancer:               &kafkago.LeastBytes{},
+			Balancer:               &kafkago.Hash{},
 			AllowAutoTopicCreation: true,
 		},
 		NewID: newID,

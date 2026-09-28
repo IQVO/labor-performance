@@ -1,4 +1,4 @@
-# ADR index (0001–0017)
+# ADR index (0001–0018)
 
 Full records live in `docs/docs/adr/` (Nygard format, Docusaurus-rendered
 at `/docs/adr`). This is a summary index — read the actual ADR before
@@ -23,6 +23,7 @@ relying on a detail not captured here.
 | 0015 | Optional travel-time component on a LaborStandard | Accepted | Caller-supplied `TravelComponentSeconds` (`0 <= t <= ExpectedSeconds`); this service never calls facility-layout or any sibling to compute or validate it. |
 | 0016 | Transactional Idempotency-Key middleware for POST /standards | Accepted | Route-scoped, transactional Idempotency-Key HTTP middleware for `POST /standards`, this service's one true resource-creation endpoint; reuses the outbox's tx-in-context mechanism (`internal/pgtx`). Ported from order-management's reference (PR #105, ADR 0023). |
 | 0017 | Kafka consumer dead-letter queue and graceful shutdown hardening | Accepted | `Consumer.handleMessage` retries `handleFulfillmentEvent` in-process (cenkalti/backoff/v4, up to 3 attempts) then dead-letters an exhausted/poisoned message to `warehouse.fulfillment.events.dlq`, committing the offset so one poison message never blocks the partition. Graceful shutdown gains a readiness-flip-first sequence backing a new `GET /readyz` distinct from `GET /healthz`. Ported from order-management's DLQ/shutdown design (PR #107, ADR 0025) — this service has no sibling-context outbound calls, so no circuit breaker work applies here. |
+| 0018 | Key-aware Hash balancer on every outbound Kafka writer | Accepted | Every writer in `internal/adapters/outbound/kafka` (`IntegrationPublisher`, `AnalyticsPublisher`, `RelaySink`) used `&kafkago.LeastBytes{}`, which ignores `Message.Key` for partition routing entirely — `Message.Key` (AssociateId / TaskType) was always set correctly but had no effect on partition placement. Switched every writer's `Balancer` to `&kafkago.Hash{}`. Same fleet-wide fix as order-management PR #111, closing the ordering gap warehouse-infra PR #42's 1→8 partition scaleup exposed. Proven via a real-broker Testcontainers test on an 8-partition topic. |
 
 ## Reading order for a newcomer
 
@@ -41,6 +42,9 @@ relying on a detail not captured here.
    shutdown) — both are fleet-wide production-readiness ports from
    order-management's reference implementations, read independently of
    the rest.
+8. 0018 (Kafka writer Hash balancer) — a fleet-wide producer-routing
+   correctness fix, read whenever touching any `kafkago.Writer`
+   construction in `internal/adapters/outbound/kafka`.
 
 ## Proposing a new ADR
 
