@@ -63,6 +63,17 @@ spec:
                 secretKeyRef:
                   name: {{ include "labor-performance.databaseSecretName" . }}
                   key: {{ .Values.database.existingSecretKey }}
+            {{- if .Values.database.migrationsExistingSecretKey }}
+            # See values.yaml's database.migrationsExistingSecretKey comment
+            # and ADR-0020: cmd/mcp also runs migrations on start (see the
+            # comment above), so it needs the same direct-connection split.
+            - name: MIGRATIONS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "labor-performance.databaseSecretName" . }}
+                  key: {{ .Values.database.migrationsExistingSecretKey }}
+                  optional: true
+            {{- end }}
             {{- end }}
             {{- range .Values.mcp.extraEnv }}
             - {{ toYaml . | nindent 14 | trim }}

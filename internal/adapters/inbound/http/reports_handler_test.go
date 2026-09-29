@@ -53,6 +53,41 @@ func decodeBody(t *testing.T, rec *httptest.ResponseRecorder, dest any) {
 
 func hour(h int) time.Time { return time.Date(2026, 9, 5, h, 0, 0, 0, time.UTC) }
 
+// performanceReportRow mirrors one rows[] element of the GET
+// /reports/performance response body.
+type performanceReportRow struct {
+	TaskType          string   `json:"taskType"`
+	HourBucket        string   `json:"hourBucket"`
+	TasksRecorded     int      `json:"tasksRecorded"`
+	TasksUnscored     int      `json:"tasksUnscored"`
+	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
+	MeanActualSeconds *float64 `json:"meanActualSeconds"`
+	StandardsDefined  int      `json:"standardsDefined"`
+}
+
+// performanceReportBar mirrors one byTaskType[] element of the same body.
+type performanceReportBar struct {
+	TaskType          string   `json:"taskType"`
+	TasksRecorded     int      `json:"tasksRecorded"`
+	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
+}
+
+// performanceReportTotals mirrors the totals object of the same body.
+type performanceReportTotals struct {
+	TasksRecorded     int      `json:"tasksRecorded"`
+	TasksScored       int      `json:"tasksScored"`
+	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
+}
+
+// performanceReportBody mirrors the GET /reports/performance response body.
+type performanceReportBody struct {
+	From       string                  `json:"from"`
+	To         string                  `json:"to"`
+	Rows       []performanceReportRow  `json:"rows"`
+	ByTaskType []performanceReportBar  `json:"byTaskType"`
+	Totals     performanceReportTotals `json:"totals"`
+}
+
 func TestGetPerformanceReportSuccess(t *testing.T) {
 	store := &stubReportStore{rep: report.Build([]report.Row{
 		{
@@ -76,29 +111,7 @@ func TestGetPerformanceReportSuccess(t *testing.T) {
 		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
 
-	var body struct {
-		From string `json:"from"`
-		To   string `json:"to"`
-		Rows []struct {
-			TaskType          string   `json:"taskType"`
-			HourBucket        string   `json:"hourBucket"`
-			TasksRecorded     int      `json:"tasksRecorded"`
-			TasksUnscored     int      `json:"tasksUnscored"`
-			MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
-			MeanActualSeconds *float64 `json:"meanActualSeconds"`
-			StandardsDefined  int      `json:"standardsDefined"`
-		} `json:"rows"`
-		ByTaskType []struct {
-			TaskType          string   `json:"taskType"`
-			TasksRecorded     int      `json:"tasksRecorded"`
-			MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
-		} `json:"byTaskType"`
-		Totals struct {
-			TasksRecorded     int      `json:"tasksRecorded"`
-			TasksScored       int      `json:"tasksScored"`
-			MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
-		} `json:"totals"`
-	}
+	var body performanceReportBody
 	decodeBody(t, rec, &body)
 
 	if body.From != "2026-09-05T00:00:00Z" || body.To != "2026-09-06T00:00:00Z" {
@@ -108,20 +121,31 @@ func TestGetPerformanceReportSuccess(t *testing.T) {
 		t.Fatalf("got %d rows, want 2", len(body.Rows))
 	}
 	// Sorted by (hour, taskType): PICK before UNCLASSIFIED.
-	if body.Rows[0].TaskType != "PICK" || body.Rows[0].HourBucket != "2026-09-05T09:00:00Z" {
-		t.Errorf("row[0] = %s @ %s, want PICK @ 09:00Z", body.Rows[0].TaskType, body.Rows[0].HourBucket)
-	}
-	if body.Rows[0].MeanEfficiencyPct == nil || *body.Rows[0].MeanEfficiencyPct != 90 {
-		t.Errorf("PICK meanEfficiencyPct = %v, want 90", body.Rows[0].MeanEfficiencyPct)
-	}
-	if body.Rows[0].StandardsDefined != 1 {
-		t.Errorf("PICK standardsDefined = %d, want 1", body.Rows[0].StandardsDefined)
-	}
+	assertReportPickRow(t, body.Rows[0])
+	assertReportUnclassifiedRow(t, body.Rows[1])
+	assertReportBreakdownAndTotals(t, body)
+}
 
-	// The unclassified bucket: real tasks, NO fabricated numbers. This
-	// is the wire-level assertion for ADR-0004's discipline — the JSON
-	// must carry null, not 0.
-	unclassified := body.Rows[1]
+// assertReportPickRow pins the scored PICK row: real means, one standard
+// defined.
+func assertReportPickRow(t *testing.T, row performanceReportRow) {
+	t.Helper()
+	if row.TaskType != "PICK" || row.HourBucket != "2026-09-05T09:00:00Z" {
+		t.Errorf("row[0] = %s @ %s, want PICK @ 09:00Z", row.TaskType, row.HourBucket)
+	}
+	if row.MeanEfficiencyPct == nil || *row.MeanEfficiencyPct != 90 {
+		t.Errorf("PICK meanEfficiencyPct = %v, want 90", row.MeanEfficiencyPct)
+	}
+	if row.StandardsDefined != 1 {
+		t.Errorf("PICK standardsDefined = %d, want 1", row.StandardsDefined)
+	}
+}
+
+// assertReportUnclassifiedRow pins the unclassified bucket: real tasks, NO
+// fabricated numbers. This is the wire-level assertion for ADR-0004's
+// discipline — the JSON must carry null, not 0.
+func assertReportUnclassifiedRow(t *testing.T, unclassified performanceReportRow) {
+	t.Helper()
 	if unclassified.TaskType != report.UnclassifiedTaskType {
 		t.Fatalf("row[1] = %s, want %s", unclassified.TaskType, report.UnclassifiedTaskType)
 	}
@@ -135,7 +159,12 @@ func TestGetPerformanceReportSuccess(t *testing.T) {
 	if unclassified.MeanActualSeconds != nil {
 		t.Errorf("unclassified meanActualSeconds = %v, want null", *unclassified.MeanActualSeconds)
 	}
+}
 
+// assertReportBreakdownAndTotals pins the per-task-type bars and the window
+// headline: every task counted, means averaged over the scored subset only.
+func assertReportBreakdownAndTotals(t *testing.T, body performanceReportBody) {
+	t.Helper()
 	if len(body.ByTaskType) != 2 {
 		t.Errorf("got %d bars, want 2 (one per task type)", len(body.ByTaskType))
 	}

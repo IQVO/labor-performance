@@ -73,6 +73,11 @@ Typos, broken links and formatting are of course fair game.
 | [0013](./0013-labor-performance-integration-events.md) | Labor performance publishes an integration event | Accepted |
 | [0014](./0014-labor-utilization-idleness.md) | Measuring idleness and utilization | Accepted |
 | [0015](./0015-optional-travel-component-on-labor-standard.md) | Optional travel-time component on a LaborStandard | Accepted |
+| [0016](./0016-idempotency-key-middleware.md) | Transactional Idempotency-Key middleware for POST /standards | Accepted |
+| [0017](./0017-kafka-dlq-and-graceful-shutdown.md) | Kafka consumer dead-letter queue and graceful shutdown hardening | Accepted |
+| [0018](./0018-kafka-writer-hash-balancer.md) | Key-aware Hash balancer on every outbound Kafka writer | Accepted |
+| [0019](./0019-horizontal-autoscaling-and-pgxpool-tuning.md) | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted |
+| [0020](./0020-migrations-direct-postgres-connection.md) | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted |
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.

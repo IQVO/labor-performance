@@ -6,7 +6,7 @@ metadata:
     {{- include "labor-performance.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 spec:
-  {{- if not .Values.autoscaling.enabled }}
+  {{- if not .Values.autoscaling.api.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
@@ -30,6 +30,9 @@ spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
       {{- end }}
       serviceAccountName: {{ include "labor-performance.serviceAccountName" . }}
       securityContext:
@@ -71,6 +74,20 @@ spec:
                 secretKeyRef:
                   name: {{ include "labor-performance.databaseSecretName" . }}
                   key: {{ .Values.database.existingSecretKey }}
+            {{- if .Values.database.migrationsExistingSecretKey }}
+            # See values.yaml's database.migrationsExistingSecretKey comment
+            # and ADR-0020: a direct (non-pooled) connection used only for
+            # the migration step below, never for the runtime pgxpool.
+            # `optional: true` so a secret without this key yet (predates
+            # this chart version) still starts the pod -- the binary falls
+            # back to DATABASE_URL itself when this env var is unset.
+            - name: MIGRATIONS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "labor-performance.databaseSecretName" . }}
+                  key: {{ .Values.database.migrationsExistingSecretKey }}
+                  optional: true
+            {{- end }}
             {{- end }}
             {{- if .Values.kafka.enabled }}
             - name: KAFKA_BROKERS

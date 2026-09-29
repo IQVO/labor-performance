@@ -67,9 +67,17 @@ func run() error {
 
 	httpAddr := getenv("MCP_ADDR", ":8090")
 	databaseURL := os.Getenv("DATABASE_URL")
+	// See cmd/labor/main.go's identical fallback and buildAdapters' doc
+	// comment for the full "why" (session-scoped pg_advisory_lock vs
+	// PgBouncer transaction-pooling incompatibility, ADR
+	// 0020-migrations-direct-postgres-connection.md, porting
+	// order-management's ADR-0029). This binary also runs migrations on
+	// start (buildAdapters below), so it needs the same direct-connection
+	// split.
+	migrationsDatabaseURL := getenv("MIGRATIONS_DATABASE_URL", databaseURL)
 	migrationsPath := getenv("MIGRATIONS_PATH", "migrations")
 
-	adapters, closeAdapters, err := buildAdapters(context.Background(), databaseURL, migrationsPath, logger)
+	adapters, closeAdapters, err := buildAdapters(context.Background(), databaseURL, migrationsDatabaseURL, migrationsPath, logger)
 	if err != nil {
 		return err
 	}
@@ -117,9 +125,15 @@ type adapterSet struct {
 
 // buildAdapters wires the Postgres repos when DATABASE_URL is set, or falls
 // back to the in-memory repos for local development without a database --
-// exactly as cmd/labor/main.go's buildRepoAdapters does (minus the
+// exactly as cmd/labor/main.go's buildPersistence does (minus the
 // ProcessedEvents repo, which only the Kafka-consuming OLTP binary needs).
-func buildAdapters(ctx context.Context, databaseURL, migrationsPath string, logger *slog.Logger) (adapterSet, func(), error) {
+//
+// migrationsDatabaseURL is used ONLY for the golang-migrate step below,
+// mirroring cmd/labor/main.go's buildPersistence exactly — see its doc
+// comment for the full "why" a direct, non-pooled connection is needed
+// here even though the pgxpool opened just after (databaseURL) stays on
+// PgBouncer.
+func buildAdapters(ctx context.Context, databaseURL, migrationsDatabaseURL, migrationsPath string, logger *slog.Logger) (adapterSet, func(), error) {
 	noop := func() {}
 
 	if databaseURL == "" {
@@ -132,7 +146,7 @@ func buildAdapters(ctx context.Context, databaseURL, migrationsPath string, logg
 	}
 
 	if err := bootretry.Retry(ctx, logger, "run migrations", func() error {
-		return postgres.RunMigrations(databaseURL, migrationsPath)
+		return postgres.RunMigrations(migrationsDatabaseURL, migrationsPath)
 	}); err != nil {
 		return adapterSet{}, noop, err
 	}

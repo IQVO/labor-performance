@@ -42,6 +42,13 @@ type Server struct {
 	// (UnitOfWork, the outbox relay) and order-management's identical
 	// IdempotencyPool field (PR #105 / ADR 0023).
 	IdempotencyPool *pgxpool.Pool
+	// Readiness backs GET /readyz (ADR-0017 §graceful shutdown): flipped
+	// to not-ready as the FIRST step of shutdown, distinct from
+	// /healthz (liveness, never flipped). Optional: a nil Readiness
+	// (every existing caller/test that predates this field) always
+	// reports ready, mirroring order-management's identical Readiness
+	// field (ADR-0025).
+	Readiness *Readiness
 }
 
 // NewRouter builds the chi router for every endpoint in CLAUDE.md's REST
@@ -75,6 +82,11 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 	// /healthz stays outside any route group; it never needed a
 	// credential and still doesn't now that REST auth is gone.
 	r.Get("/healthz", s.handleHealthz)
+	// /readyz is distinct from /healthz (ADR-0017 §graceful shutdown):
+	// liveness never flips, readiness flips to not-ready as the FIRST
+	// step of shutdown so a Kubernetes readinessProbe pointed here
+	// stops routing new traffic during the drain window that follows.
+	r.Get("/readyz", s.handleReadyz)
 
 	// POST /standards is route-scoped (r.With, not r.Use) behind
 	// RequireIdempotencyKey — it is this service's one true
