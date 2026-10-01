@@ -129,6 +129,10 @@ func NewConsumerForTopic(brokers []string, groupID, topic string, recordTaskPerf
 		dlqWriter: &kafkago.Writer{
 			Addr:  kafkago.TCP(brokers...),
 			Topic: topic + dlqTopicSuffix,
+			// The fleet auto-creates every topic on first write (warehouse-infra
+			// kafka.tf); without this a missing "<topic>.dlq" fails the DLQ
+			// publish with "Unknown Topic Or Partition" and stops the consumer.
+			AllowAutoTopicCreation: true,
 		},
 	}
 }
