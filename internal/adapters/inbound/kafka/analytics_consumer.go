@@ -2,17 +2,17 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	ce "github.com/cloudevents/sdk-go/v2/event"
 	kafkago "github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/otelkafka"
 	"github.com/claudioed/labor-performance/internal/analytics/report"
 )
@@ -25,7 +25,7 @@ import (
 const AnalyticsConsumerGroup = "labor-performance-analytics"
 
 // ProcessedEvents is the analytics consumer's idempotency gate: it
-// records which event_ids have been admitted, so an at-least-once
+// records which CloudEvents ids have been admitted, so an at-least-once
 // redelivery is a no-op.
 //
 // It is declared HERE — where it is consumed — rather than reused from
@@ -61,7 +61,7 @@ type analyticsData struct {
 
 // AnalyticsConsumer reads this service's own domain events off the
 // analytics topic and applies each to the report ProjectionStore, exactly
-// once per event_id.
+// once per CloudEvents id.
 //
 // It is a SECOND, independent inbound Kafka adapter alongside Consumer:
 // Consumer feeds the OLTP write path from fulfillment-execution's
@@ -84,7 +84,7 @@ func NewAnalyticsConsumer(brokers []string, projection report.ProjectionStore, p
 	return &AnalyticsConsumer{
 		Reader: kafkago.NewReader(kafkago.ReaderConfig{
 			Brokers: brokers,
-			Topic:   envelope.TopicLaborPerformanceAnalytics,
+			Topic:   cloudevents.TopicLaborPerformanceAnalytics,
 			GroupID: AnalyticsConsumerGroup,
 			// Start a brand-new consumer group at the EARLIEST offset.
 			// The projection is a replayable read model, not a live
@@ -132,7 +132,7 @@ func (c *AnalyticsConsumer) Run(ctx context.Context) error {
 // from the message headers. It is exported separately from Run so trace
 // propagation can be tested without a live broker.
 func (c *AnalyticsConsumer) Handle(ctx context.Context, msg kafkago.Message) error {
-	ctx, span := otelkafka.StartConsumeSpan(otelkafka.Extract(ctx, &msg), envelope.TopicLaborPerformanceAnalytics)
+	ctx, span := otelkafka.StartConsumeSpan(otelkafka.Extract(ctx, &msg), cloudevents.TopicLaborPerformanceAnalytics)
 	defer span.End()
 
 	if err := c.HandleMessage(ctx, msg.Value); err != nil {
@@ -142,39 +142,45 @@ func (c *AnalyticsConsumer) Handle(ctx context.Context, msg kafkago.Message) err
 	return nil
 }
 
-// HandleMessage decodes raw as an analytics envelope and applies the
-// matching projection method for its event_type. It is exported
-// separately from Run so tests can feed raw envelopes without a live
-// broker.
+// HandleMessage decodes raw as a CloudEvents 1.0 event (ADR 0021) and
+// applies the matching projection method for its full `type`. It is
+// exported separately from Run so tests can feed raw events without a
+// live broker.
 //
-// Three behaviours are load-bearing here:
+// Four behaviours are load-bearing here:
 //
-//   - An event type outside the projection contract is ignored and NOT
-//     marked processed, so widening the contract later can reprocess it
-//     on a replay.
-//   - A projecting event is deduped on event_id BEFORE it is applied, so
-//     an at-least-once redelivery cannot double-count.
+//   - A message that is not a valid CloudEvent (including the retired
+//     flat envelope) is logged at WARN and skipped (nil error), never
+//     parsed: this consumer has no DLQ, and Run commits past it.
+//   - A type outside the projection contract is ignored and NOT marked
+//     processed, so widening the contract later can reprocess it on a
+//     replay.
+//   - A projecting event is deduped on the CloudEvents id BEFORE it is
+//     applied, so an at-least-once redelivery cannot double-count.
 //   - A malformed payload is an error (returned, logged by Run), not a
-//     silent skip — unlike an unknown event type, which is expected.
+//     silent skip — unlike an unknown type, which is expected.
 func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error {
-	var env envelope.AnalyticsEnvelope
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return fmt.Errorf("analytics: decode envelope: %w", err)
-	}
-
-	// Carry the envelope's identity on whatever consume span is active,
-	// so a projection failure is traceable to the exact message.
-	trace.SpanFromContext(ctx).SetAttributes(
-		attribute.String("messaging.message.event_id", env.EventId),
-		attribute.String("messaging.message.event_type", env.EventType),
-		attribute.String("messaging.message.source", env.Source),
-	)
-
-	if !isProjecting(env.EventType) {
+	evt, err := cloudevents.Decode(raw)
+	if err != nil {
+		c.logger().WarnContext(ctx, "skipping invalid cloudevent on analytics topic",
+			"topic", cloudevents.TopicLaborPerformanceAnalytics, "error", err)
 		return nil
 	}
 
-	isNew, err := c.Processed.MarkProcessed(ctx, env.EventId)
+	// Carry the event's identity on whatever consume span is active, so
+	// a projection failure is traceable to the exact message.
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.String("messaging.message.id", evt.ID()),
+		attribute.String("cloudevents.event_type", evt.Type()),
+		attribute.String("cloudevents.event_source", evt.Source()),
+		attribute.String("cloudevents.event_subject", evt.Subject()),
+	)
+
+	if !isProjecting(evt.Type()) {
+		return nil
+	}
+
+	isNew, err := c.Processed.MarkProcessed(ctx, evt.ID())
 	if err != nil {
 		return fmt.Errorf("analytics: mark processed: %w", err)
 	}
@@ -183,19 +189,29 @@ func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error
 	}
 
 	var data analyticsData
-	if err := json.Unmarshal(env.Data, &data); err != nil {
+	if err := evt.DataAs(&data); err != nil {
 		return fmt.Errorf("analytics: decode data: %w", err)
 	}
 
-	return c.apply(ctx, env, data)
+	return c.apply(ctx, evt, data)
 }
 
-// isProjecting reports whether eventType moves a report counter.
+// logger returns the configured logger, or slog.Default for a zero-value
+// consumer built directly by a test.
+func (c *AnalyticsConsumer) logger() *slog.Logger {
+	if c.Logger == nil {
+		return slog.Default()
+	}
+	return c.Logger
+}
+
+// isProjecting reports whether the full CloudEvents type moves a report
+// counter.
 func isProjecting(eventType string) bool {
 	switch eventType {
-	case envelope.EventTypeLaborStandardDefined,
-		envelope.EventTypeLaborStandardRevised,
-		envelope.EventTypeTaskPerformanceRecorded:
+	case cloudevents.TypeLaborStandardDefined,
+		cloudevents.TypeLaborStandardRevised,
+		cloudevents.TypeTaskPerformanceRecorded:
 		return true
 	default:
 		return false
@@ -204,34 +220,35 @@ func isProjecting(eventType string) bool {
 
 // apply routes a decoded event to the projection method for its type,
 // resolving each fact's BUSINESS time (which chooses the hour bucket)
-// separately from the envelope's occurred_at (which feeds the freshness
-// watermark). A zero business time falls back to occurred_at rather than
-// bucketing the row at the zero instant.
-func (c *AnalyticsConsumer) apply(ctx context.Context, env envelope.AnalyticsEnvelope, data analyticsData) error {
-	switch env.EventType {
-	case envelope.EventTypeLaborStandardDefined:
-		return c.Projection.ApplyLaborStandardDefined(ctx, env.EventId, report.StandardFact{
+// separately from the CloudEvents `time` attribute (the domain
+// occurred-at, which feeds the freshness watermark). A zero business time
+// falls back to `time` rather than bucketing the row at the zero instant.
+func (c *AnalyticsConsumer) apply(ctx context.Context, evt ce.Event, data analyticsData) error {
+	occurredAt := evt.Time()
+	switch evt.Type() {
+	case cloudevents.TypeLaborStandardDefined:
+		return c.Projection.ApplyLaborStandardDefined(ctx, evt.ID(), report.StandardFact{
 			TaskType:        data.TaskType,
 			ExpectedSeconds: data.ExpectedSeconds,
-			EffectiveFrom:   orOccurredAt(data.EffectiveFrom, env.OccurredAt),
-			OccurredAt:      env.OccurredAt,
+			EffectiveFrom:   orOccurredAt(data.EffectiveFrom, occurredAt),
+			OccurredAt:      occurredAt,
 		})
 
-	case envelope.EventTypeLaborStandardRevised:
-		return c.Projection.ApplyLaborStandardRevised(ctx, env.EventId, report.StandardFact{
+	case cloudevents.TypeLaborStandardRevised:
+		return c.Projection.ApplyLaborStandardRevised(ctx, evt.ID(), report.StandardFact{
 			TaskType:        data.TaskType,
 			ExpectedSeconds: data.ExpectedSeconds,
-			EffectiveFrom:   orOccurredAt(data.EffectiveFrom, env.OccurredAt),
-			OccurredAt:      env.OccurredAt,
+			EffectiveFrom:   orOccurredAt(data.EffectiveFrom, occurredAt),
+			OccurredAt:      occurredAt,
 		})
 
-	case envelope.EventTypeTaskPerformanceRecorded:
-		return c.Projection.ApplyTaskPerformanceRecorded(ctx, env.EventId, report.TaskPerformanceFact{
+	case cloudevents.TypeTaskPerformanceRecorded:
+		return c.Projection.ApplyTaskPerformanceRecorded(ctx, evt.ID(), report.TaskPerformanceFact{
 			TaskType:      data.TaskType,
 			ActualSeconds: data.ActualSeconds,
 			EfficiencyPct: data.EfficiencyPct,
-			CompletedAt:   orOccurredAt(data.CompletedAt, env.OccurredAt),
-			OccurredAt:    env.OccurredAt,
+			CompletedAt:   orOccurredAt(data.CompletedAt, occurredAt),
+			OccurredAt:    occurredAt,
 		})
 
 	default:

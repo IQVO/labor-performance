@@ -31,7 +31,7 @@ actual wire contract (ADR-0014 there) before writing any code: its
 `TaskCompleted` payload already carries `duration_seconds` (`completedAt
 − claimedAt`) and `associate_id`. That means the PREVIOUS task's claim
 instant is recoverable, with no upstream change, as
-`occurred_at − duration_seconds`. An associate's idle gap is then simply
+`time − duration_seconds` (the TaskCompleted CloudEvent `time`; ADR 0021). An associate's idle gap is then simply
 `claimedAt(task N+1) − completedAt(task N)` — fully computable from data
 this service already consumes. Phase 1 of the idleness plan is therefore
 scoped to `labor-performance` alone.

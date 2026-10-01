@@ -3,7 +3,7 @@
 > **⚠️ Study project.** This repository is an educational exercise in
 > Domain-Driven Design applied to warehouse management/execution systems. It
 > follows real industry-standard patterns and terminology (WMS/WES/WCS,
-> CloudEvents-like envelopes, RFC 7807, hexagonal architecture) but is
+> CloudEvents 1.0 envelopes, RFC 7807, hexagonal architecture) but is
 > **not a production system** and is **not affiliated with, endorsed by, or
 > representative of any real-world
 > company**.
@@ -103,7 +103,8 @@ internal/
                                    analytics_consumer.go — warehouse.labor-performance
                                                        .analytics (projector)
     inbound/mcp/                  MCP tools, resource template, prompt (cmd/mcp)
-    kafka/                        envelope (topic/event-type constants), otelkafka
+    kafka/                        cloudevents (CloudEvents 1.0 New/Decode, topics,
+                                   full type constants — ADR 0021), otelkafka
     outbound/postgres/            pgxpool repos + golang-migrate runner (OLTP DB);
                                    unit_of_work.go, outbox_publisher.go, outbox_relay.go
                                    — the transactional outbox (ADR 0010)
@@ -156,9 +157,9 @@ struct tags in the domain packages.
   from a station with no checked-in occupant (e.g. a robot station) is
   still recorded and counted in `GetTaskTypePerformance`, just excluded
   from any per-associate scorecard.
-- **Idempotent on the Kafka message's `event_id`.** Recording the same
-  `event_id` twice is a no-op, never a double-count. Keyed on `event_id`,
-  not `TaskId`, since a task id could in principle be reused after a long
+- **Idempotent on the CloudEvents `id`.** Recording the same
+  event `id` twice is a no-op, never a double-count. Keyed on the event
+  `id`, not `TaskId`, since a task id could in principle be reused after a long
   time.
 - **Every write and its event commit together.** With Postgres and
   `EVENT_PUBLISHER=kafka`, a use case's Saves, the `processed_events`
@@ -172,7 +173,7 @@ struct tags in the domain packages.
   [ADR 0010](docs/docs/adr/0010-transactional-outbox.md).
 - **Idle gaps are derived, never invented.** Each consumed `TaskCompleted`
   derives the associate's idle gap since their previous completion
-  (`claimedAt = occurred_at − duration_seconds`), capped at
+  (`claimedAt = time − duration_seconds`, `time` being the TaskCompleted CloudEvent attribute), capped at
   `IDLE_GAP_CAP_SECONDS`, in the same unit of work as the performance row.
   A still-running "open gap" is computed at read time only. See
   [ADR 0014](docs/docs/adr/0014-labor-utilization-idleness.md).
@@ -238,8 +239,11 @@ go run ./cmd/labor
 
 # In another terminal, publish a TaskCompleted-shaped message using any
 # Kafka producer CLI, e.g. kcat:
-echo '{"event_id":"'$(uuidgen)'","event_type":"TaskCompleted","occurred_at":"2026-08-29T22:00:00Z","source":"fulfillment-execution","data":{"task_id":"task-1","station_id":"station-1","work_unit_id":"wu-1","associate_id":"assoc-1","duration_seconds":52,"task_type":"PICK"}}' \
-  | kcat -P -b localhost:9092 -t warehouse.fulfillment.events
+# Every message must be a CloudEvents 1.0 event (ADR 0021); anything else
+# is dead-lettered to warehouse.fulfillment.events.dlq.
+echo '{"specversion":"1.0","id":"'$(uuidgen)'","source":"/warehouse/fulfillment-execution","type":"com.warehouse.wes.fulfillment-execution.task.TaskCompleted","subject":"task-1","time":"2026-08-29T22:00:00Z","datacontenttype":"application/json","dataschema":"urn:warehouse:fulfillment-execution:events:TaskCompleted:v1","data":{"task_id":"task-1","station_id":"station-1","work_unit_id":"wu-1","associate_id":"assoc-1","duration_seconds":52,"task_type":"PICK"}}' \
+  | kcat -P -b localhost:9092 -t warehouse.fulfillment.events \
+      -H 'content-type=application/cloudevents+json; charset=UTF-8'
 
 # Then verify it was recorded:
 curl -s localhost:8080/associates/assoc-1/scorecard

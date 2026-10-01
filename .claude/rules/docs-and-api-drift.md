@@ -67,18 +67,20 @@ AsyncAPI contract is instead described narratively in:
 
 - `docs/docs/overview.md` (the fleet diagram)
 - `docs/docs/ecosystem/context-map.md` (the inbound relationship with the
-  full envelope example, and the outbound integration topic)
+  full CloudEvents example, and the outbound integration topic)
 - `docs/docs/ddd/subdomain-classification.md` (domain events and where
   they are published)
 - `docs/docs/adr/0007-analytical-data-product.md`,
   `docs/docs/adr/0010-transactional-outbox.md`,
-  `docs/docs/adr/0013-labor-performance-integration-events.md` and
+  `docs/docs/adr/0013-labor-performance-integration-events.md`,
+  `docs/docs/adr/0021-cloudevents-mandatory-event-envelope.md` (the
+  envelope itself) and
   `docs/docs/adr/0014-labor-utilization-idleness.md` (the outbound topics
   and the `idle_seconds_before` field)
 - `docs/docs/api-reference/rest-reports/labor-performance-reports-api.info.mdx`
   (references the analytics topic feeding the report)
 
-**When `apis/asyncapi.yaml` changes** (a new channel, a changed envelope
+**When `apis/asyncapi.yaml` changes** (a new channel, a changed payload
 field, a new event type), these narrative pages must be hand-updated —
 there is no generator to catch drift automatically. Grep for the topic
 name (`warehouse.fulfillment.events`, `warehouse.labor-performance.

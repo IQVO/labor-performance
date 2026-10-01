@@ -12,12 +12,13 @@ import (
 	"testing"
 	"time"
 
+	ce "github.com/cloudevents/sdk-go/v2/event"
 	kafkago "github.com/segmentio/kafka-go"
 	"github.com/testcontainers/testcontainers-go"
 	tckafka "github.com/testcontainers/testcontainers-go/modules/kafka"
 
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
@@ -25,7 +26,7 @@ import (
 )
 
 // TestConsumer_ProjectsRealBrokerMessages runs the real consumer against an
-// isolated Kafka Testcontainers broker, then verifies a TaskCompleted envelope
+// isolated Kafka Testcontainers broker, then verifies a CloudEvents TaskCompleted
 // records task performance.
 func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 	testCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -82,10 +83,11 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 	defer writer.Close()
 	if err := writer.WriteMessages(testCtx, kafkago.Message{
 		Key: []byte(eventID),
-		Value: mustEnvelopeJSON(t, eventID, envelope.EventTypeTaskCompleted, "fulfillment-execution", map[string]any{
+		Value: mustTaskCompletedCloudEvent(t, eventID, map[string]any{
 			"task_id": taskID, "station_id": "station-1", "work_unit_id": "wu-1",
 			"associate_id": associateID, "duration_seconds": 52,
 		}),
+		Headers: []kafkago.Header{cloudevents.ContentTypeHeader()},
 	}); err != nil {
 		t.Fatalf("publish TaskCompleted: %v", err)
 	}
@@ -102,19 +104,17 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 	}
 }
 
-// TestConsumer_DualReadSameEventIdFiresOnce is the load-bearing idempotency
-// assertion for the later dual-write phase (ADR-0027/0021): the real
-// consumer, against a real Kafka broker, must fire the use case exactly
-// once when it receives BOTH a flat-shaped and a CloudEvents-shaped
-// TaskCompleted message that share the same event_id/id key — mirroring
-// what dual-write mode will actually put on the wire during the bake
-// period.
-func TestConsumer_DualReadSameEventIdFiresOnce(t *testing.T) {
+// TestConsumer_RedeliveredCloudEventFiresOnce is the load-bearing
+// idempotency assertion (ADR 0021): the real consumer, against a real
+// Kafka broker, must fire the use case exactly once when the same
+// CloudEvent (same `id`) is delivered twice — an at-least-once redelivery
+// or an outbox relay replay.
+func TestConsumer_RedeliveredCloudEventFiresOnce(t *testing.T) {
 	testCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	container, err := tckafka.Run(testCtx, "confluentinc/confluent-local:7.6.1",
-		tckafka.WithClusterID(fmt.Sprintf("labor-performance-itest-dual-%d", time.Now().UnixNano())))
+		tckafka.WithClusterID(fmt.Sprintf("labor-performance-itest-redeliver-%d", time.Now().UnixNano())))
 	if err != nil {
 		t.Fatalf("start Kafka container: %v", err)
 	}
@@ -129,12 +129,12 @@ func TestConsumer_DualReadSameEventIdFiresOnce(t *testing.T) {
 		t.Fatalf("get Kafka brokers: %v", err)
 	}
 
-	topic := fmt.Sprintf("labor-performance-itest-dual-%d", time.Now().UnixNano())
+	topic := fmt.Sprintf("labor-performance-itest-redeliver-%d", time.Now().UnixNano())
 	createTopicAndWaitForLeader(t, testCtx, brokers[0], topic)
 
-	taskID := fmt.Sprintf("integration-kafka-dual-task-%d", time.Now().UnixNano())
-	associateID := fmt.Sprintf("integration-kafka-dual-assoc-%d", time.Now().UnixNano())
-	eventID := fmt.Sprintf("integration-kafka-dual-evt-%d", time.Now().UnixNano())
+	taskID := fmt.Sprintf("integration-kafka-redeliver-task-%d", time.Now().UnixNano())
+	associateID := fmt.Sprintf("integration-kafka-redeliver-assoc-%d", time.Now().UnixNano())
+	eventID := fmt.Sprintf("integration-kafka-redeliver-evt-%d", time.Now().UnixNano())
 
 	standards := memory.NewStandardRepo()
 	performances := memory.NewPerformanceRepo()
@@ -149,7 +149,7 @@ func TestConsumer_DualReadSameEventIdFiresOnce(t *testing.T) {
 
 	consumer := inboundkafka.NewConsumerForTopic(
 		brokers,
-		fmt.Sprintf("labor-performance-integration-test-dual-%d", time.Now().UnixNano()),
+		fmt.Sprintf("labor-performance-integration-test-redeliver-%d", time.Now().UnixNano()),
 		topic,
 		recordTaskPerformance,
 		nil,
@@ -163,26 +163,16 @@ func TestConsumer_DualReadSameEventIdFiresOnce(t *testing.T) {
 	writer := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: topic}
 	defer writer.Close()
 
-	dataJSON := mustDataJSON(t, map[string]any{
+	ceValue := mustTaskCompletedCloudEvent(t, eventID, map[string]any{
 		"task_id": taskID, "station_id": "station-1", "work_unit_id": "wu-1",
 		"associate_id": associateID, "duration_seconds": 52, "task_type": "PICK",
 	})
-
-	// Same event_id/id key on both messages, one flat-shaped, one
-	// CloudEvents-shaped — the exact same-key collision the dual-write
-	// bake period (Phase 5/6) will produce on the real topic.
-	flatValue := mustEnvelopeJSON(t, eventID, envelope.EventTypeTaskCompleted, "fulfillment-execution", map[string]any{
-		"task_id": taskID, "station_id": "station-1", "work_unit_id": "wu-1",
-		"associate_id": associateID, "duration_seconds": 52, "task_type": "PICK",
-	})
-	ceValue := mustCloudEventJSON(t, eventID, "com.warehouse.wes.fulfillment-execution.task.TaskCompleted",
-		"/warehouse/fulfillment-execution", taskID, dataJSON)
 
 	if err := writer.WriteMessages(testCtx,
-		kafkago.Message{Key: []byte(eventID), Value: flatValue},
-		kafkago.Message{Key: []byte(eventID), Value: ceValue},
+		kafkago.Message{Key: []byte(eventID), Value: ceValue, Headers: []kafkago.Header{cloudevents.ContentTypeHeader()}},
+		kafkago.Message{Key: []byte(eventID), Value: ceValue, Headers: []kafkago.Header{cloudevents.ContentTypeHeader()}},
 	); err != nil {
-		t.Fatalf("publish dual-shaped TaskCompleted messages: %v", err)
+		t.Fatalf("publish redelivered TaskCompleted messages: %v", err)
 	}
 
 	waitForPerformance(t, testCtx, performances, shared.AssociateId(associateID))
@@ -196,7 +186,7 @@ func TestConsumer_DualReadSameEventIdFiresOnce(t *testing.T) {
 		t.Fatalf("ScorecardFor: %v", err)
 	}
 	if finalScorecard.TaskCount != 1 {
-		t.Fatalf("TaskCount = %d, want 1 — the use case must fire exactly once for two messages sharing the same event_id, regardless of envelope shape", finalScorecard.TaskCount)
+		t.Fatalf("TaskCount = %d, want 1 — the use case must fire exactly once for two deliveries of the same CloudEvents id", finalScorecard.TaskCount)
 	}
 
 	consumeCancel()
@@ -210,37 +200,38 @@ func TestConsumer_DualReadSameEventIdFiresOnce(t *testing.T) {
 	}
 }
 
-func mustDataJSON(t *testing.T, data map[string]any) json.RawMessage {
+// mustTaskCompletedCloudEvent builds fulfillment-execution's
+// TaskCompleted exactly as it appears on the wire: a CloudEvents 1.0
+// structured-mode event with the full cross-service type string.
+func mustTaskCompletedCloudEvent(t *testing.T, id string, data map[string]any) []byte {
 	t.Helper()
-	raw, err := json.Marshal(data)
-	if err != nil {
-		t.Fatalf("marshal data: %v", err)
+	e := ce.New(cloudevents.SpecVersion)
+	e.SetID(id)
+	e.SetSource("/warehouse/fulfillment-execution")
+	e.SetType(cloudevents.TypeFulfillmentTaskCompleted)
+	e.SetSubject(fmt.Sprint(data["task_id"]))
+	e.SetTime(time.Now().UTC())
+	e.SetDataSchema("urn:warehouse:fulfillment-execution:events:TaskCompleted:v1")
+	if err := e.SetData(cloudevents.DataContentType, data); err != nil {
+		t.Fatalf("set data: %v", err)
 	}
-	return raw
+	body, err := json.Marshal(e)
+	if err != nil {
+		t.Fatalf("marshal cloudevent: %v", err)
+	}
+	return body
 }
 
-// cloudEventWire mirrors the unexported cloudEvent struct in the kafka
-// package (this file is package kafka_test, so it must define its own
-// wire-shape type rather than reach into the package's internals).
-type cloudEventWire struct {
-	Specversion     string          `json:"specversion"`
-	Id              string          `json:"id"`
-	Type            string          `json:"type"`
-	Source          string          `json:"source"`
-	Subject         string          `json:"subject"`
-	Time            time.Time       `json:"time"`
-	Datacontenttype string          `json:"datacontenttype"`
-	Data            json.RawMessage `json:"data"`
-}
-
-func mustCloudEventJSON(t *testing.T, id, ceType, source, subject string, data json.RawMessage) []byte {
+// legacyFlatTaskCompleted is the RETIRED flat envelope shape. It exists
+// only so tests can prove the consumer rejects it.
+func legacyFlatTaskCompleted(t *testing.T, eventID string, data map[string]any) []byte {
 	t.Helper()
-	body, err := json.Marshal(cloudEventWire{
-		Specversion: "1.0", Id: id, Type: ceType, Source: source, Subject: subject,
-		Time: time.Now().UTC(), Datacontenttype: "application/json", Data: data,
+	body, err := json.Marshal(map[string]any{
+		"event_id": eventID, "event_type": "TaskCompleted",
+		"occurred_at": time.Now().UTC(), "source": "fulfillment-execution", "data": data,
 	})
 	if err != nil {
-		t.Fatalf("marshal cloudevents envelope: %v", err)
+		t.Fatalf("marshal legacy flat message: %v", err)
 	}
 	return body
 }
@@ -299,19 +290,4 @@ func waitForPerformance(t *testing.T, ctx context.Context, performances *memory.
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-}
-
-func mustEnvelopeJSON(t *testing.T, eventID, eventType, source string, data map[string]any) []byte {
-	t.Helper()
-	rawData, err := json.Marshal(data)
-	if err != nil {
-		t.Fatalf("marshal data: %v", err)
-	}
-	body, err := json.Marshal(envelope.Envelope{
-		EventId: eventID, EventType: eventType, OccurredAt: time.Now().UTC(), Source: source, Data: rawData,
-	})
-	if err != nil {
-		t.Fatalf("marshal envelope: %v", err)
-	}
-	return body
 }

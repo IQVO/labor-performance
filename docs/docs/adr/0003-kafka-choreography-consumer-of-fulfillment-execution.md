@@ -12,6 +12,8 @@ description: ADR 0003 — this service is a pure Kafka consumer of TaskCompleted
 
 Accepted. Established with the initial implementation of this bounded context.
 
+> **Envelope superseded by [ADR-0021](./0021-cloudevents-mandatory-event-envelope.md).** The flat envelope (`event_id`/`event_type`/`occurred_at`) described below is retired: every message is now a CloudEvents 1.0 event. The rest of this decision stands.
+
 ## Context
 
 This service's core job — scoring a completed task against a standard —

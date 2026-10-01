@@ -25,7 +25,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/analyticsstore"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/postgres"
@@ -109,7 +109,7 @@ func run() error {
 	defer cancelConsumer()
 	go func() {
 		logger.Info("analytics consumer starting",
-			"topic", envelope.TopicLaborPerformanceAnalytics,
+			"topic", cloudevents.TopicLaborPerformanceAnalytics,
 			"group", inboundkafka.AnalyticsConsumerGroup,
 			"brokers", kafkaBrokers)
 		if err := consumer.Run(consumerCtx); err != nil {

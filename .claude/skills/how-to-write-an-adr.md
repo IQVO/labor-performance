@@ -71,7 +71,7 @@ The `## Decision` section is the part worth the most editing effort: see
 ADR-0003 (`docs/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution.md`)
 for a model example in this repo — it states the exact mechanism (a pure
 Kafka consumer under a named consumer group, idempotency keyed on the
-envelope's `event_id` rather than `TaskId`), names the wire-contract gap
+event id rather than `TaskId`), names the wire-contract gap
 it accepts (`TaskType` resolving to unclassified when absent), and is
 specific enough that this skill set's own
 how-to-add-an-integration-event guide can point straight at it for the

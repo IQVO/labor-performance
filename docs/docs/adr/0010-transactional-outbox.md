@@ -16,6 +16,8 @@ ADR 0003); this record is `labor-performance` adopting the same pattern,
 adapted to a service whose only outbound topic is the analytics data
 product's and whose main write path is itself a Kafka consumer.
 
+> **Envelope superseded by [ADR-0021](./0021-cloudevents-mandatory-event-envelope.md).** The flat envelope (`event_id`/`event_type`/`occurred_at`) described below is retired: every message is now a CloudEvents 1.0 event. The rest of this decision stands.
+
 ## Context
 
 Both of this service's writing use cases ended with the same shape:
