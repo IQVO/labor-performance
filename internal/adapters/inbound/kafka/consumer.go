@@ -155,6 +155,13 @@ func (c *Consumer) Run(ctx context.Context) error {
 		}
 
 		if err := c.handleMessage(ctx, msg); err != nil {
+			// A commit/DLQ write interrupted by shutdown is not a
+			// failure: the uncommitted offset is simply redelivered
+			// to the next consumer, and the handler is idempotent on
+			// the CloudEvents id.
+			if ctx.Err() != nil {
+				return nil
+			}
 			return err
 		}
 	}
