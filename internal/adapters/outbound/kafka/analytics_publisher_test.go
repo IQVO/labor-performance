@@ -2,14 +2,15 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	ce "github.com/cloudevents/sdk-go/v2/event"
 	kafkago "github.com/segmentio/kafka-go"
 
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
 
@@ -28,7 +29,7 @@ func (w *recordingWriter) WriteMessages(_ context.Context, msgs ...kafkago.Messa
 	return nil
 }
 
-// seqIDs mints predictable envelope event ids so assertions can name
+// seqIDs mints predictable CloudEvents ids so assertions can name
 // them.
 func seqIDs() func() string {
 	n := 0
@@ -45,21 +46,26 @@ func newTestPublisher() (*AnalyticsPublisher, *recordingWriter) {
 
 func at(h int) time.Time { return time.Date(2026, 9, 5, h, 0, 0, 0, time.UTC) }
 
-func decode(t *testing.T, msg kafkago.Message) (envelope.AnalyticsEnvelope, map[string]any) {
+func decode(t *testing.T, msg kafkago.Message) (ce.Event, map[string]any) {
 	t.Helper()
-	var env envelope.AnalyticsEnvelope
-	if err := json.Unmarshal(msg.Value, &env); err != nil {
-		t.Fatalf("decode envelope: %v", err)
+	return decodeCloudEvent(t, msg.Value)
+}
+
+func decodeCloudEvent(t *testing.T, value []byte) (ce.Event, map[string]any) {
+	t.Helper()
+	env, err := cloudevents.Decode(value)
+	if err != nil {
+		t.Fatalf("decode cloudevent: %v", err)
 	}
 	var data map[string]any
-	if err := json.Unmarshal(env.Data, &data); err != nil {
+	if err := env.DataAs(&data); err != nil {
 		t.Fatalf("decode data: %v", err)
 	}
 	return env, data
 }
 
 // publishCase is one row of TestAnalyticsPublisherPublishesEachDomainEvent's
-// table: a domain event, the envelope shape the analytics topic must carry,
+// table: a domain event, the CloudEvent the analytics topic must carry,
 // and the payload assertions for its data block.
 type publishCase struct {
 	name          string
@@ -76,7 +82,7 @@ func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 		{
 			name:          "LaborStandardDefined",
 			event:         shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9)),
-			wantEventType: envelope.EventTypeLaborStandardDefined,
+			wantEventType: cloudevents.TypeLaborStandardDefined,
 			wantKey:       "PICK",
 			assertData:    assertStandardDefinedData,
 		},
@@ -86,14 +92,14 @@ func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 				travel := int64(15)
 				return shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, &travel, at(9))
 			}(),
-			wantEventType: envelope.EventTypeLaborStandardDefined,
+			wantEventType: cloudevents.TypeLaborStandardDefined,
 			wantKey:       "PICK",
 			assertData:    assertStandardDefinedTravelData,
 		},
 		{
 			name:          "LaborStandardRevised",
 			event:         shared.NewLaborStandardRevised(at(10), "std-2", shared.Pick, 45, 40, nil, at(10)),
-			wantEventType: envelope.EventTypeLaborStandardRevised,
+			wantEventType: cloudevents.TypeLaborStandardRevised,
 			wantKey:       "PICK",
 			assertData:    assertStandardRevisedData,
 		},
@@ -101,7 +107,7 @@ func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 			name: "TaskPerformanceRecorded",
 			event: shared.NewTaskPerformanceRecorded(
 				at(11), "task-1", shared.AssociateId("assoc-1"), shared.Pack, 52, &pct, nil, at(9)),
-			wantEventType: envelope.EventTypeTaskPerformanceRecorded,
+			wantEventType: cloudevents.TypeTaskPerformanceRecorded,
 			wantKey:       "PACK",
 			assertData:    assertTaskPerformanceRecordedData,
 		},
@@ -113,7 +119,7 @@ func TestAnalyticsPublisherPublishesEachDomainEvent(t *testing.T) {
 }
 
 // assertPublishedEnvelope publishes tc's event through a fresh publisher and
-// pins the envelope, partition key, and payload the analytics topic must
+// pins the CloudEvent, partition key, and payload the analytics topic must
 // carry for it.
 func assertPublishedEnvelope(t *testing.T, tc publishCase) {
 	t.Helper()
@@ -127,20 +133,27 @@ func assertPublishedEnvelope(t *testing.T, tc publishCase) {
 	}
 
 	env, data := decode(t, w.msgs[0])
-	if env.EventType != tc.wantEventType {
-		t.Errorf("event_type = %q, want %q", env.EventType, tc.wantEventType)
+	if env.Type() != tc.wantEventType {
+		t.Errorf("type = %q, want %q", env.Type(), tc.wantEventType)
 	}
-	if env.Source != envelope.Source {
-		t.Errorf("source = %q, want %q", env.Source, envelope.Source)
+	if env.Source() != cloudevents.Source {
+		t.Errorf("source = %q, want %q", env.Source(), cloudevents.Source)
 	}
-	if env.SchemaVersion != envelope.AnalyticsSchemaVersion {
-		t.Errorf("schema_version = %d, want %d", env.SchemaVersion, envelope.AnalyticsSchemaVersion)
+	if env.SpecVersion() != "1.0" || env.DataContentType() != "application/json" {
+		t.Errorf("specversion/datacontenttype = %q/%q", env.SpecVersion(), env.DataContentType())
 	}
-	if env.EventId == "" {
-		t.Error("event_id is empty; it is the projection's idempotency key")
+	if want := cloudevents.DataSchema(cloudevents.StreamAnalytics, eventNameOf(tc.wantEventType), 1); env.DataSchema() != want {
+		t.Errorf("dataschema = %q, want %q", env.DataSchema(), want)
 	}
-	if !env.OccurredAt.Equal(tc.event.OccurredAt()) {
-		t.Errorf("occurred_at = %v, want %v", env.OccurredAt, tc.event.OccurredAt())
+	if env.Subject() == "" {
+		t.Error("subject is empty")
+	}
+	assertContentTypeHeader(t, w.msgs[0].Headers)
+	if env.ID() == "" {
+		t.Error("id is empty; it is the projection's idempotency key")
+	}
+	if !env.Time().Equal(tc.event.OccurredAt()) {
+		t.Errorf("time = %v, want %v", env.Time(), tc.event.OccurredAt())
 	}
 	if got := string(w.msgs[0].Key); got != tc.wantKey {
 		t.Errorf("partition key = %q, want %q", got, tc.wantKey)
@@ -199,7 +212,7 @@ func assertTaskPerformanceRecordedData(t *testing.T, data map[string]any) {
 		t.Errorf("actual_seconds = %v, want 52", data["actual_seconds"])
 	}
 	// completed_at is the business time and must travel
-	// distinctly from the envelope's occurred_at.
+	// distinctly from the CloudEvents `time` attribute.
 	if data["completed_at"] != at(9).Format(time.RFC3339) {
 		t.Errorf("completed_at = %v, want %v", data["completed_at"], at(9).Format(time.RFC3339))
 	}
@@ -233,8 +246,8 @@ func TestAnalyticsPublisherPreservesNilEfficiency(t *testing.T) {
 func TestAnalyticsPublisherMintsAUniqueEventIdPerMessage(t *testing.T) {
 	p, w := newTestPublisher()
 
-	// Two events for the SAME task type: their envelope event ids must
-	// still differ, since event_id — not task id or task type — is the
+	// Two events for the SAME task type: their CloudEvents ids must
+	// still differ, since the id — not task id or task type — is the
 	// projection's dedup key.
 	err := p.Publish(context.Background(),
 		shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9)),
@@ -249,8 +262,8 @@ func TestAnalyticsPublisherMintsAUniqueEventIdPerMessage(t *testing.T) {
 
 	first, _ := decode(t, w.msgs[0])
 	second, _ := decode(t, w.msgs[1])
-	if first.EventId == second.EventId {
-		t.Errorf("both messages carry event_id %q; a shared id would make the projector drop one", first.EventId)
+	if first.ID() == second.ID() {
+		t.Errorf("both messages carry id %q; a shared id would make the projector drop one", first.ID())
 	}
 }
 
@@ -336,3 +349,23 @@ type unknownEvent struct{}
 
 func (unknownEvent) EventName() string     { return "SomethingElseHappened" }
 func (unknownEvent) OccurredAt() time.Time { return at(9) }
+
+// eventNameOf returns the PascalCase <EventName> segment of a full type.
+func eventNameOf(fullType string) string {
+	return fullType[strings.LastIndex(fullType, ".")+1:]
+}
+
+// assertContentTypeHeader pins the structured-mode Kafka header every
+// produced message must carry.
+func assertContentTypeHeader(t *testing.T, headers []kafkago.Header) {
+	t.Helper()
+	for _, h := range headers {
+		if h.Key == "content-type" {
+			if string(h.Value) != "application/cloudevents+json; charset=UTF-8" {
+				t.Errorf("content-type header = %q", h.Value)
+			}
+			return
+		}
+	}
+	t.Errorf("missing content-type header, got %v", headers)
+}

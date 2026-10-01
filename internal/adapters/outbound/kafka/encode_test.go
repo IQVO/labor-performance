@@ -10,7 +10,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
 
@@ -37,15 +37,15 @@ func TestAnalyticsPublisherEncodeProducesOneWireMessagePerContractEvent(t *testi
 		eventType string
 		key       string
 	}{
-		{envelope.EventTypeLaborStandardDefined, "PICK"},
-		{envelope.EventTypeTaskPerformanceRecorded, "PACK"},
+		{cloudevents.TypeLaborStandardDefined, "PICK"},
+		{cloudevents.TypeTaskPerformanceRecorded, "PACK"},
 	} {
 		m := msgs[i]
-		if m.Topic != envelope.TopicLaborPerformanceAnalytics {
-			t.Errorf("msg %d topic = %q, want %q", i, m.Topic, envelope.TopicLaborPerformanceAnalytics)
+		if m.Topic != cloudevents.TopicLaborPerformanceAnalytics {
+			t.Errorf("msg %d topic = %q, want %q", i, m.Topic, cloudevents.TopicLaborPerformanceAnalytics)
 		}
 		if m.EventType != want.eventType {
-			t.Errorf("msg %d event_type = %q, want %q", i, m.EventType, want.eventType)
+			t.Errorf("msg %d EventType = %q, want %q", i, m.EventType, want.eventType)
 		}
 		if string(m.Key) != want.key {
 			t.Errorf("msg %d key = %q, want %q", i, string(m.Key), want.key)
@@ -54,12 +54,14 @@ func TestAnalyticsPublisherEncodeProducesOneWireMessagePerContractEvent(t *testi
 			t.Errorf("msg %d headers are nil; the propagator has nowhere to inject", i)
 		}
 		env, _ := decode(t, kafkago.Message{Value: m.Value})
-		if env.EventType != want.eventType || env.Source != envelope.Source || env.SchemaVersion != envelope.AnalyticsSchemaVersion {
-			t.Errorf("msg %d envelope = %+v", i, env)
+		if env.Type() != want.eventType || env.Source() != cloudevents.Source ||
+			env.DataSchema() != cloudevents.DataSchema(cloudevents.StreamAnalytics, eventNameOf(want.eventType), 1) {
+			t.Errorf("msg %d cloudevent = %+v", i, env.Context)
 		}
-		if env.EventId == "" {
-			t.Errorf("msg %d event_id is empty", i)
+		if env.ID() == "" {
+			t.Errorf("msg %d id is empty", i)
 		}
+		assertContentTypeHeader(t, m.Headers)
 	}
 }
 

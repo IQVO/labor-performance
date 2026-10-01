@@ -14,7 +14,7 @@ import (
 	tckafka "github.com/testcontainers/testcontainers-go/modules/kafka"
 
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/application/ports"
@@ -119,8 +119,9 @@ func TestConsumer_PoisonMessage_GoesToDeadLetterTopicWithoutBlockingPartition(t 
 	writer := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: topic}
 	defer func() { _ = writer.Close() }()
 	if err := writer.WriteMessages(ctx, kafkago.Message{
-		Key: []byte(poisonEventID),
-		Value: mustEnvelopeJSON(t, poisonEventID, envelope.EventTypeTaskCompleted, "fulfillment-execution", map[string]any{
+		Key:     []byte(poisonEventID),
+		Headers: []kafkago.Header{cloudevents.ContentTypeHeader()},
+		Value: mustTaskCompletedCloudEvent(t, poisonEventID, map[string]any{
 			"task_id": "task-dlq-poison-1", "station_id": "station-1", "work_unit_id": "wu-1",
 			"associate_id": poisonAssociateID, "duration_seconds": 52,
 		}),
@@ -143,8 +144,8 @@ func TestConsumer_PoisonMessage_GoesToDeadLetterTopicWithoutBlockingPartition(t 
 	if err := json.Unmarshal(dlqMsg.Value, &dlqPayload); err != nil {
 		t.Fatalf("DLQ message value is not the raw original JSON payload: %v", err)
 	}
-	if dlqPayload["event_id"] != poisonEventID {
-		t.Errorf("DLQ payload event_id = %v, want %q -- payload must be byte-identical to the original for manual replay", dlqPayload["event_id"], poisonEventID)
+	if dlqPayload["id"] != poisonEventID {
+		t.Errorf("DLQ payload id = %v, want %q -- payload must be byte-identical to the original for manual replay", dlqPayload["event_id"], poisonEventID)
 	}
 	assertHeader(t, dlqMsg.Headers, "x-dlq-source-topic", topic)
 	if h := headerValue(dlqMsg.Headers, "x-dlq-error"); h == "" {
@@ -160,8 +161,9 @@ func TestConsumer_PoisonMessage_GoesToDeadLetterTopicWithoutBlockingPartition(t 
 	// message.
 	healthyAssociateID := fmt.Sprintf("assoc-dlq-healthy-%d", time.Now().UnixNano())
 	if err := writer.WriteMessages(ctx, kafkago.Message{
-		Key: []byte(fmt.Sprintf("evt-dlq-good-%d", time.Now().UnixNano())),
-		Value: mustEnvelopeJSON(t, fmt.Sprintf("evt-dlq-good-%d", time.Now().UnixNano()), envelope.EventTypeTaskCompleted, "fulfillment-execution", map[string]any{
+		Key:     []byte(fmt.Sprintf("evt-dlq-good-%d", time.Now().UnixNano())),
+		Headers: []kafkago.Header{cloudevents.ContentTypeHeader()},
+		Value: mustTaskCompletedCloudEvent(t, fmt.Sprintf("evt-dlq-good-%d", time.Now().UnixNano()), map[string]any{
 			"task_id": "task-dlq-good-1", "station_id": "station-1", "work_unit_id": "wu-1",
 			"associate_id": healthyAssociateID, "duration_seconds": 45,
 		}),
@@ -189,6 +191,115 @@ func TestConsumer_PoisonMessage_GoesToDeadLetterTopicWithoutBlockingPartition(t 
 	}
 	if poisonRecorded {
 		t.Error("poison associate should not have a recorded TaskPerformance -- the handler always failed for its event_id")
+	}
+}
+
+// TestConsumer_LegacyFlatEnvelope_IsDeadLetteredNotParsed proves ADR
+// 0021's consumer rule against a real broker: a retired flat-envelope
+// message is NOT a CloudEvent, so it is never parsed and never retried —
+// it is dead-lettered once (raw payload preserved) and committed past,
+// and a valid CloudEvent right behind it on the same partition is still
+// processed.
+func TestConsumer_LegacyFlatEnvelope_IsDeadLetteredNotParsed(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	container, err := tckafka.Run(ctx, "confluentinc/confluent-local:7.6.1",
+		tckafka.WithClusterID(fmt.Sprintf("lp-consumer-legacy-itest-%d", time.Now().UnixNano())))
+	if err != nil {
+		t.Fatalf("start Kafka container: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := testcontainers.TerminateContainer(container); err != nil {
+			t.Errorf("terminate Kafka container: %v", err)
+		}
+	})
+	brokers, err := container.Brokers(ctx)
+	if err != nil {
+		t.Fatalf("resolve Kafka brokers: %v", err)
+	}
+	topic := fmt.Sprintf("warehouse.fulfillment.events.legacy-itest-%d", time.Now().UnixNano())
+	dlqTopic := topic + ".dlq"
+	createTopicAndWaitForLeader(t, ctx, brokers[0], topic)
+	createTopicAndWaitForLeader(t, ctx, brokers[0], dlqTopic)
+
+	performances := memory.NewPerformanceRepo()
+	recordTaskPerformance := &usecases.RecordTaskPerformance{
+		Performances: performances,
+		Standards:    memory.NewStandardRepo(),
+		Processed:    memory.NewProcessedEventRepo(),
+		Events:       events.NewLogPublisher(nil),
+		Clock:        memory.SystemClock{},
+	}
+	consumer := inboundkafka.NewConsumerForTopic(brokers,
+		fmt.Sprintf("labor-performance-legacy-itest-%d", time.Now().UnixNano()), topic, recordTaskPerformance, nil)
+	defer func() { _ = consumer.Close() }()
+
+	consumeCtx, consumeCancel := context.WithCancel(ctx)
+	runErr := make(chan error, 1)
+	go func() { runErr <- consumer.Run(consumeCtx) }()
+
+	dlqReader := kafkago.NewReader(kafkago.ReaderConfig{
+		Brokers: brokers, Topic: dlqTopic,
+		GroupID:     fmt.Sprintf("dlq-legacy-reader-%d", time.Now().UnixNano()),
+		StartOffset: kafkago.FirstOffset,
+	})
+	defer func() { _ = dlqReader.Close() }()
+
+	legacyAssociateID := fmt.Sprintf("assoc-legacy-%d", time.Now().UnixNano())
+	healthyAssociateID := fmt.Sprintf("assoc-legacy-healthy-%d", time.Now().UnixNano())
+	legacyID := fmt.Sprintf("evt-legacy-%d", time.Now().UnixNano())
+
+	writer := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: topic}
+	defer func() { _ = writer.Close() }()
+	if err := writer.WriteMessages(ctx,
+		kafkago.Message{Key: []byte(legacyID), Value: legacyFlatTaskCompleted(t, legacyID, map[string]any{
+			"task_id": "task-legacy-1", "station_id": "station-1", "work_unit_id": "wu-1",
+			"associate_id": legacyAssociateID, "duration_seconds": 52,
+		})},
+		kafkago.Message{
+			Key:     []byte("evt-legacy-good"),
+			Headers: []kafkago.Header{cloudevents.ContentTypeHeader()},
+			Value: mustTaskCompletedCloudEvent(t, fmt.Sprintf("evt-legacy-good-%d", time.Now().UnixNano()), map[string]any{
+				"task_id": "task-legacy-good-1", "station_id": "station-1", "work_unit_id": "wu-1",
+				"associate_id": healthyAssociateID, "duration_seconds": 45,
+			}),
+		},
+	); err != nil {
+		t.Fatalf("publish messages: %v", err)
+	}
+
+	dlqCtx, dlqCancel := context.WithTimeout(ctx, 60*time.Second)
+	defer dlqCancel()
+	dlqMsg, err := dlqReader.ReadMessage(dlqCtx)
+	if err != nil {
+		t.Fatalf("read DLQ message: %v", err)
+	}
+	var dlqPayload map[string]any
+	if err := json.Unmarshal(dlqMsg.Value, &dlqPayload); err != nil {
+		t.Fatalf("DLQ value is not the raw original payload: %v", err)
+	}
+	if dlqPayload["event_id"] != legacyID {
+		t.Errorf("DLQ payload = %v, want the raw legacy message", dlqPayload)
+	}
+	if h := headerValue(dlqMsg.Headers, "x-dlq-error"); h == "" {
+		t.Error("DLQ message missing x-dlq-error header")
+	}
+
+	waitForPerformance(t, ctx, performances, shared.AssociateId(healthyAssociateID))
+
+	consumeCancel()
+	select {
+	case err := <-runErr:
+		if err != nil && ctx.Err() == nil {
+			t.Errorf("run consumer: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("consumer did not stop after context cancellation")
+	}
+
+	if recorded, _ := performances.ExistsByAssociateID(ctx, shared.AssociateId(legacyAssociateID)); recorded {
+		t.Error("a legacy flat-envelope message was parsed and recorded; it must be rejected")
 	}
 }
 

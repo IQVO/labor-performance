@@ -16,7 +16,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	outboundkafka "github.com/claudioed/labor-performance/internal/adapters/outbound/kafka"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/postgres"
@@ -132,10 +132,10 @@ func TestOutbox_DefineStandard_CommitsAggregateAndEventTogether(t *testing.T) {
 	if got := countRows(t, pool, "labor_standards", "task_type = 'PICK'"); got != 2 {
 		t.Fatalf("expected 2 labor_standards rows for PICK (closed prior + active), got %d", got)
 	}
-	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND topic = '%s' AND event_type = '%s' AND key = 'PICK'", envelope.TopicLaborPerformanceAnalytics, envelope.EventTypeLaborStandardDefined)); got != 1 {
+	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND topic = '%s' AND event_type = '%s' AND key = 'PICK'", cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TypeLaborStandardDefined)); got != 1 {
 		t.Fatalf("expected 1 unpublished LaborStandardDefined row keyed PICK, got %d", got)
 	}
-	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND event_type = '%s' AND key = 'PICK'", envelope.EventTypeLaborStandardRevised)); got != 1 {
+	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND event_type = '%s' AND key = 'PICK'", cloudevents.TypeLaborStandardRevised)); got != 1 {
 		t.Fatalf("expected 1 unpublished LaborStandardRevised row keyed PICK, got %d", got)
 	}
 	var headers string
@@ -170,7 +170,7 @@ func TestOutbox_RecordTaskPerformance_CommitsMarkerRowAndEventTogether(t *testin
 	if got := countRows(t, pool, "processed_events", "event_id = 'evt-1'"); got != 1 {
 		t.Fatalf("expected the processed_events marker, got %d", got)
 	}
-	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND event_type = '%s' AND key = 'PACK'", envelope.EventTypeTaskPerformanceRecorded)); got != 1 {
+	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND event_type = '%s' AND key = 'PACK'", cloudevents.TypeTaskPerformanceRecorded)); got != 1 {
 		t.Fatalf("expected 1 unpublished TaskPerformanceRecorded row keyed PACK, got %d", got)
 	}
 
@@ -259,10 +259,10 @@ func TestOutboxRelay_PublishesInOrderAndMarksRows(t *testing.T) {
 	if n != 3 || len(sink.sent) != 3 {
 		t.Fatalf("expected 3 published, got n=%d sent=%d", n, len(sink.sent))
 	}
-	want := []string{envelope.EventTypeLaborStandardDefined, envelope.EventTypeLaborStandardRevised, envelope.EventTypeTaskPerformanceRecorded}
+	want := []string{cloudevents.TypeLaborStandardDefined, cloudevents.TypeLaborStandardRevised, cloudevents.TypeTaskPerformanceRecorded}
 	for i, w := range want {
-		if sink.sent[i].EventType != w || string(sink.sent[i].Key) != "PICK" || sink.sent[i].Topic != envelope.TopicLaborPerformanceAnalytics {
-			t.Fatalf("event %d: want %s keyed PICK on %s, got %s keyed %s on %s", i, w, envelope.TopicLaborPerformanceAnalytics, sink.sent[i].EventType, sink.sent[i].Key, sink.sent[i].Topic)
+		if sink.sent[i].EventType != w || string(sink.sent[i].Key) != "PICK" || sink.sent[i].Topic != cloudevents.TopicLaborPerformanceAnalytics {
+			t.Fatalf("event %d: want %s keyed PICK on %s, got %s keyed %s on %s", i, w, cloudevents.TopicLaborPerformanceAnalytics, sink.sent[i].EventType, sink.sent[i].Key, sink.sent[i].Topic)
 		}
 		if sink.sent[i].Headers == nil {
 			t.Fatalf("event %d: headers must be decoded to a non-nil slice", i)
@@ -356,10 +356,10 @@ func TestOutbox_RecordTaskPerformance_FansOutToBothAnalyticsAndIntegrationTopics
 	// ONE TaskPerformanceRecorded event, encoded through BOTH encoders,
 	// must produce ONE outbox row per topic — the fan-out variant of
 	// ADR 0010, extended by ADR 0013's integration topic.
-	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND topic = '%s' AND event_type = '%s' AND key = 'PICK'", envelope.TopicLaborPerformanceAnalytics, envelope.EventTypeTaskPerformanceRecorded)); got != 1 {
+	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND topic = '%s' AND event_type = '%s' AND key = 'PICK'", cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TypeTaskPerformanceRecorded)); got != 1 {
 		t.Fatalf("expected 1 unpublished analytics-topic row keyed PICK, got %d", got)
 	}
-	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND topic = '%s' AND event_type = '%s' AND key = 'assoc-fanout'", envelope.TopicLaborPerformanceEvents, envelope.EventTypeTaskPerformanceRecorded)); got != 1 {
+	if got := countOutbox(t, pool, fmt.Sprintf("published_at IS NULL AND topic = '%s' AND event_type = '%s' AND key = 'assoc-fanout'", cloudevents.TopicLaborPerformanceEvents, cloudevents.TypeTaskPerformanceRecorded)); got != 1 {
 		t.Fatalf("expected 1 unpublished integration-topic row keyed assoc-fanout, got %d", got)
 	}
 	if got := countOutbox(t, pool, "true"); got != 2 {
@@ -379,7 +379,7 @@ func TestOutbox_RecordTaskPerformance_FansOutToBothAnalyticsAndIntegrationTopics
 	for _, m := range sink.sent {
 		gotTopics[m.Topic] = true
 	}
-	if !gotTopics[envelope.TopicLaborPerformanceAnalytics] || !gotTopics[envelope.TopicLaborPerformanceEvents] {
+	if !gotTopics[cloudevents.TopicLaborPerformanceAnalytics] || !gotTopics[cloudevents.TopicLaborPerformanceEvents] {
 		t.Fatalf("expected the relay to forward to both topics, got %v", sink.sent)
 	}
 }

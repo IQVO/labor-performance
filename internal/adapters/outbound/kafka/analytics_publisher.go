@@ -22,13 +22,12 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	kafkago "github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel/codes"
 
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/otelkafka"
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
@@ -62,8 +61,10 @@ type Encoder interface {
 }
 
 // AnalyticsPublisher publishes each labor-performance domain event onto
-// envelope.TopicLaborPerformanceAnalytics as an
-// envelope.AnalyticsEnvelope. It satisfies ports.EventPublisher, so the
+// cloudevents.TopicLaborPerformanceAnalytics as a CloudEvents 1.0 event
+// (ADR 0021) whose dataschema is
+// urn:warehouse:labor-performance:analytics:<EventName>:v1 (this replaces
+// the retired analytics schema-version field). It satisfies ports.EventPublisher, so the
 // composition root can hand it the same event stream the log publisher
 // gets.
 //
@@ -74,7 +75,7 @@ type Encoder interface {
 // a pure serializer with no read-back into the OLTP store.
 type AnalyticsPublisher struct {
 	Writer Writer
-	// NewID mints the envelope's event_id. It is the projection's
+	// NewID mints the CloudEvents `id`. It is the projection's
 	// idempotency key, so it must be unique per published message —
 	// notably NOT the TaskId, which CLAUDE.md explicitly rules out as a
 	// dedup key.
@@ -82,7 +83,7 @@ type AnalyticsPublisher struct {
 }
 
 // NewAnalyticsPublisher constructs an AnalyticsPublisher writing to the
-// analytics topic on brokers. newID mints each envelope's event_id.
+// analytics topic on brokers. newID mints each CloudEvent's id.
 //
 // Balancer is kafkago.Hash, matching IntegrationPublisher's choice (see
 // its doc comment): this publisher already keys every message by
@@ -94,7 +95,7 @@ func NewAnalyticsPublisher(brokers []string, newID func() string) *AnalyticsPubl
 	return &AnalyticsPublisher{
 		Writer: &kafkago.Writer{
 			Addr:                   kafkago.TCP(brokers...),
-			Topic:                  envelope.TopicLaborPerformanceAnalytics,
+			Topic:                  cloudevents.TopicLaborPerformanceAnalytics,
 			Balancer:               &kafkago.Hash{},
 			AllowAutoTopicCreation: true,
 		},
@@ -121,8 +122,8 @@ func (p *AnalyticsPublisher) Publish(ctx context.Context, events ...shared.Domai
 	return nil
 }
 
-// Encode maps every event to its analytics message — envelope, partition
-// key and the W3C trace headers of the span active in ctx — without
+// Encode maps every event to its analytics message — CloudEvent, partition
+// key, the CloudEvents content-type header and the W3C trace headers of the span active in ctx — without
 // writing anything. Events outside the analytics contract produce no
 // message. The returned Encoded carry Topic set to the analytics topic
 // and a nil kafkago.Message.Topic (see Encoded).
@@ -134,27 +135,29 @@ func (p *AnalyticsPublisher) Publish(ctx context.Context, events ...shared.Domai
 func (p *AnalyticsPublisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([]Encoded, error) {
 	out := make([]Encoded, 0, len(events))
 	for _, event := range events {
-		eventType, key, data, ok := marshalData(event)
+		eventType, entity, key, subject, data, ok := marshalData(event)
 		if !ok {
 			continue
 		}
 
-		payload, err := json.Marshal(envelope.AnalyticsEnvelope{
-			EventId:       p.newID(),
-			EventType:     eventType,
-			OccurredAt:    event.OccurredAt(),
-			Source:        envelope.Source,
-			SchemaVersion: envelope.AnalyticsSchemaVersion,
-			Data:          data,
+		payload, err := cloudevents.New(cloudevents.Spec{
+			ID:        p.newID(),
+			Entity:    entity,
+			EventName: eventType,
+			Subject:   subject,
+			Time:      event.OccurredAt(),
+			Stream:    cloudevents.StreamAnalytics,
+			Version:   1,
+			Data:      data,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("kafka: marshal analytics envelope: %w", err)
+			return nil, fmt.Errorf("kafka: encode analytics cloudevent: %w", err)
 		}
-		headers := []kafkago.Header{}
+		headers := []kafkago.Header{cloudevents.ContentTypeHeader()}
 		otelkafka.Inject(ctx, &headers)
 		out = append(out, Encoded{
-			Topic:     envelope.TopicLaborPerformanceAnalytics,
-			EventType: eventType,
+			Topic:     cloudevents.TopicLaborPerformanceAnalytics,
+			EventType: cloudevents.Type(entity, eventType),
 			Key:       []byte(key),
 			Value:     payload,
 			Headers:   headers,
@@ -163,7 +166,7 @@ func (p *AnalyticsPublisher) Encode(ctx context.Context, events ...shared.Domain
 	return out, nil
 }
 
-// newID mints an envelope event id, returning "" only when no generator
+// newID mints a CloudEvent id, returning "" only when no generator
 // was injected (which never happens in wiring, but keeps the zero value
 // usable).
 func (p *AnalyticsPublisher) newID() string {
@@ -173,14 +176,17 @@ func (p *AnalyticsPublisher) newID() string {
 	return p.NewID()
 }
 
-// marshalData maps a domain event to its analytics event_type, partition
-// key, and snake_case JSON payload. The bool return is false for an event
-// type outside the analytics contract, so Encode can skip it.
+// marshalData maps a domain event to its analytics event name, `type`
+// entity segment, partition key, CloudEvents subject, and snake_case JSON
+// payload. The bool return is false for an event type outside the
+// analytics contract, so Encode can skip it.
 //
 // The partition key is the TaskType for every event: it keeps all the
 // events that fold into one report dimension on a single partition, so
-// the projector applies them in the order they were published.
-func marshalData(e shared.DomainEvent) (eventType, key string, data json.RawMessage, ok bool) {
+// the projector applies them in the order they were published. The
+// subject is the aggregate instance id: the StandardId for the standard
+// events, performanceSubject for TaskPerformanceRecorded.
+func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, data map[string]any, ok bool) {
 	switch ev := e.(type) {
 	case shared.LaborStandardDefined:
 		fields := map[string]any{
@@ -192,7 +198,7 @@ func marshalData(e shared.DomainEvent) (eventType, key string, data json.RawMess
 		if ev.TravelComponentSeconds != nil {
 			fields["travel_component_seconds"] = *ev.TravelComponentSeconds
 		}
-		return envelope.EventTypeLaborStandardDefined, string(ev.TaskType), mustMarshal(fields), true
+		return cloudevents.EventLaborStandardDefined, cloudevents.EntityStandard, string(ev.TaskType), string(ev.StandardId), fields, true
 
 	case shared.LaborStandardRevised:
 		fields := map[string]any{
@@ -205,10 +211,10 @@ func marshalData(e shared.DomainEvent) (eventType, key string, data json.RawMess
 		if ev.NewTravelComponentSeconds != nil {
 			fields["travel_component_seconds"] = *ev.NewTravelComponentSeconds
 		}
-		return envelope.EventTypeLaborStandardRevised, string(ev.TaskType), mustMarshal(fields), true
+		return cloudevents.EventLaborStandardRevised, cloudevents.EntityStandard, string(ev.TaskType), string(ev.StandardId), fields, true
 
 	case shared.TaskPerformanceRecorded:
-		return envelope.EventTypeTaskPerformanceRecorded, string(ev.TaskType), mustMarshal(map[string]any{
+		return cloudevents.EventTaskPerformanceRecorded, cloudevents.EntityPerformance, string(ev.TaskType), performanceSubject(ev), map[string]any{
 			"task_id":      ev.TaskId,
 			"associate_id": string(ev.AssociateId),
 			"task_type":    string(ev.TaskType),
@@ -223,29 +229,18 @@ func marshalData(e shared.DomainEvent) (eventType, key string, data json.RawMess
 			// fabricated 0.
 			"idle_seconds_before": ev.IdleSecondsBefore,
 			"completed_at":        ev.CompletedAt,
-		}), true
+		}, true
 
 	default:
-		return "", "", nil, false
+		return "", "", "", "", nil, false
 	}
-}
-
-// mustMarshal marshals a map whose shape is fully controlled by
-// marshalData, so an error here would be a programming mistake rather
-// than a runtime condition.
-func mustMarshal(v any) json.RawMessage {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(fmt.Sprintf("kafka: marshal analytics data: %v", err))
-	}
-	return b
 }
 
 // write publishes one already-encoded message inside a producer span,
 // injecting that span's context into the message headers so the
 // projector's consume span becomes its child.
 func (p *AnalyticsPublisher) write(ctx context.Context, msg Encoded) error {
-	ctx, span := otelkafka.StartPublishSpan(ctx, envelope.TopicLaborPerformanceAnalytics)
+	ctx, span := otelkafka.StartPublishSpan(ctx, cloudevents.TopicLaborPerformanceAnalytics)
 	defer span.End()
 
 	headers := append([]kafkago.Header{}, msg.Headers...)

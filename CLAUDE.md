@@ -9,7 +9,7 @@ service in the fleet (after `order-management`, `inventory-storage`,
 https://claudioed.github.io/labor-performance/
 
 > **Study project.** Educational DDD exercise using real industry patterns
-> and terminology (WMS/WES, CloudEvents-like envelopes, RFC 7807, hexagonal
+> and terminology (WMS/WES, CloudEvents 1.0 envelopes, RFC 7807, hexagonal
 > architecture). Not a production system; not affiliated with a major e-commerce retailer,
 > Manhattan Associates, Blue Yonder, or any other company.
 
@@ -17,7 +17,8 @@ https://claudioed.github.io/labor-performance/
 
 1. **Pure Kafka consumer of `fulfillment-execution`, nothing else.** This
    service subscribes to `warehouse.fulfillment.events` (topic, shared/
-   fan-out with `wes-work-planning`) and reacts only to `TaskCompleted`. It
+   fan-out with `wes-work-planning`) and reacts only to
+   `com.warehouse.wes.fulfillment-execution.task.TaskCompleted`. It
    is a separate Go module/repo: **no Go import from, and no write access
    to**, `fulfillment-execution` or `workforce-management`. It never calls
    ANY sibling context over REST or MCP — choreography, not orchestration
@@ -34,7 +35,41 @@ https://claudioed.github.io/labor-performance/
    measurable. See `.claude/rules/domain-model.md`.
 4. **This service NEVER accepts a TaskPerformance write over REST.**
    Recording a performance row is exclusively Kafka-consumer-driven
-   (`RecordTaskPerformance`, idempotent on the Kafka message's `event_id`).
+   (`RecordTaskPerformance`, idempotent on the CloudEvents `id`).
+
+## Events: CloudEvents 1.0 is MANDATORY
+
+Every Kafka message this service produces or consumes (integration
+`warehouse.<ctx>.events` AND analytics `warehouse.<ctx>.analytics`) is a
+CloudEvents 1.0 event in structured content mode. This is a hard fleet rule,
+not a preference:
+
+- No flat envelope (`event_id`/`event_type`/`occurred_at`), no dual-write,
+  no dual-read, no envelope toggle env var (`EVENT_ENVELOPE_MODE` is gone).
+- Build/validate/(un)marshal with `github.com/cloudevents/sdk-go/v2/event`
+  via `internal/adapters/kafka/cloudevents/`; transport stays kafka-go.
+- Kafka header `content-type: application/cloudevents+json; charset=UTF-8`.
+- Required attributes: `specversion=1.0`, `id` (UUID, stable across outbox
+  redelivery), `source=/warehouse/labor-performance`, `type`, `subject` (aggregate id), `time`
+  (occurred-at, UTC), `datacontenttype=application/json`,
+  `dataschema=urn:warehouse:labor-performance:<events|analytics>:<EventName>:v<N>`.
+- `type` = `com.warehouse.<subdomain>.<bounded-context>.<entity>.<EventName>`;
+  for this service: `com.warehouse.wes.labor-performance.<entity>.<EventName>`. Breaking payload
+  change => new `.v2` type + new dataschema version, never mutate.
+- Consumers dispatch on the FULL `type`, ignore unknown types, dedupe on
+  `id`, and DLQ/skip (never crash, never parse a legacy shape) anything that
+  fails CloudEvents validation.
+
+Full standard and the fleet's cross-service type catalogue: ADR-0021
+(`docs/docs/adr/`).
+
+This service's types (exact): publishes
+`com.warehouse.wes.labor-performance.standard.LaborStandardDefined`,
+`com.warehouse.wes.labor-performance.standard.LaborStandardRevised` (analytics
+only) and `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`
+(analytics + integration; consumed by workforce-management); consumes
+`com.warehouse.wes.fulfillment-execution.task.TaskCompleted` plus its own
+three analytics types (projector).
 
 ## Project overview
 
@@ -96,6 +131,7 @@ internal/
     outbound/events/            log publisher (default)
     outbound/kafka/              analytics + integration publishers, relay sink, fan-out
                                  (EVENT_PUBLISHER=kafka)
+    kafka/cloudevents/           the ONLY CloudEvents 1.0 New/Decode helper, topics, type consts (ADR 0021)
     outbound/telemetry/         OTel traces/metrics/logs
 migrations/                    golang-migrate SQL (OLTP schema)
 migrations/analytics/          golang-migrate SQL (analytical schema)
@@ -183,5 +219,5 @@ npm run clean-api-docs:all && npm run gen-api-docs:all   # what CI's docs-api-dr
   Docusaurus `docusaurus-plugin-openapi-docs` wiring for both, the
   `@faker-js/faker` / `postman-collection` pitfall, and the docs.yml
   trigger-branch gap.
-- `.claude/rules/adrs-and-decisions.md` — index of ADRs 0001–0015 and what
-  each one settles.
+- `.claude/rules/adrs-and-decisions.md` — index of ADRs and what each one
+  settles (ADR 0021 = the mandatory CloudEvents envelope).

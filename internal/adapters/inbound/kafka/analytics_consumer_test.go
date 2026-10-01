@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	ce "github.com/cloudevents/sdk-go/v2/event"
+
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/analytics/report"
 )
 
@@ -86,24 +88,43 @@ func newTestAnalyticsConsumer(p report.ProjectionStore, gate ProcessedEvents) *A
 	return &AnalyticsConsumer{Projection: p, Processed: gate}
 }
 
+// analyticsMessage builds a raw CloudEvents 1.0 analytics message with
+// the given full type, exactly as AnalyticsPublisher emits it.
 func analyticsMessage(t *testing.T, eventId, eventType string, occurredAt time.Time, data map[string]any) []byte {
 	t.Helper()
-	payload, err := json.Marshal(data)
-	if err != nil {
-		t.Fatalf("marshal data: %v", err)
+	return rawCloudEvent(t, eventId, eventType, "subject-1",
+		"urn:warehouse:labor-performance:analytics:Test:v1", occurredAt, data)
+}
+
+// rawCloudEvent builds a structured-mode CloudEvents 1.0 JSON value with
+// an arbitrary data payload (which may be raw JSON bytes).
+func rawCloudEvent(t *testing.T, id, eventType, subject, dataschema string, occurredAt time.Time, data any) []byte {
+	t.Helper()
+	e := ce.New(cloudevents.SpecVersion)
+	e.SetID(id)
+	e.SetSource("/warehouse/test")
+	e.SetType(eventType)
+	e.SetSubject(subject)
+	e.SetTime(occurredAt)
+	e.SetDataSchema(dataschema)
+	if raw, ok := data.(json.RawMessage); ok {
+		if err := e.SetData(cloudevents.DataContentType, []byte(raw)); err != nil {
+			t.Fatalf("set data: %v", err)
+		}
+	} else if err := e.SetData(cloudevents.DataContentType, data); err != nil {
+		t.Fatalf("set data: %v", err)
 	}
-	raw, err := json.Marshal(envelope.AnalyticsEnvelope{
-		EventId:       eventId,
-		EventType:     eventType,
-		OccurredAt:    occurredAt,
-		Source:        envelope.Source,
-		SchemaVersion: envelope.AnalyticsSchemaVersion,
-		Data:          payload,
-	})
+	b, err := json.Marshal(e)
 	if err != nil {
-		t.Fatalf("marshal envelope: %v", err)
+		t.Fatalf("marshal cloudevent: %v", err)
 	}
-	return raw
+	return b
+}
+
+// legacyFlatMessage is the retired flat envelope shape. Every consumer
+// must reject it (DLQ/skip), never parse it.
+func legacyFlatMessage(eventType string, data string) []byte {
+	return []byte(`{"event_id":"legacy-1","event_type":"` + eventType + `","occurred_at":"2026-09-05T09:00:00Z","source":"legacy","schema_version":1,"data":` + data + `}`)
 }
 
 func ts(h, m int) time.Time { return time.Date(2026, 9, 5, h, m, 0, 0, time.UTC) }
@@ -112,13 +133,13 @@ func TestAnalyticsConsumerProjectsTaskPerformanceRecorded(t *testing.T) {
 	proj := &recordingProjection{}
 	c := newTestAnalyticsConsumer(proj, newFakeProcessedEvents())
 
-	raw := analyticsMessage(t, "evt-1", envelope.EventTypeTaskPerformanceRecorded, ts(11, 0), map[string]any{
+	raw := analyticsMessage(t, "evt-1", cloudevents.TypeTaskPerformanceRecorded, ts(11, 0), map[string]any{
 		"task_id":        "task-1",
 		"associate_id":   "assoc-1",
 		"task_type":      "PICK",
 		"efficiency_pct": 86.5,
 		"actual_seconds": 52,
-		// Deliberately EARLIER than occurred_at: this is a replayed /
+		// Deliberately EARLIER than the CloudEvents time: this is a replayed /
 		// late-ingested event, and it must bucket by when the work
 		// happened, not when we got around to scoring it.
 		"completed_at": ts(9, 30),
@@ -156,7 +177,7 @@ func TestAnalyticsConsumerNullEfficiencyStaysNil(t *testing.T) {
 	// An unscorable task: efficiency_pct is JSON null on the wire. It
 	// must arrive as nil, NOT as 0 — a 0 would silently brand the
 	// associate a 0% performer.
-	raw := analyticsMessage(t, "evt-1", envelope.EventTypeTaskPerformanceRecorded, ts(9, 0), map[string]any{
+	raw := analyticsMessage(t, "evt-1", cloudevents.TypeTaskPerformanceRecorded, ts(9, 0), map[string]any{
 		"task_id":        "task-1",
 		"task_type":      "",
 		"efficiency_pct": nil,
@@ -186,13 +207,13 @@ func TestAnalyticsConsumerProjectsStandardEvents(t *testing.T) {
 	proj := &recordingProjection{}
 	c := newTestAnalyticsConsumer(proj, newFakeProcessedEvents())
 
-	defined := analyticsMessage(t, "evt-1", envelope.EventTypeLaborStandardDefined, ts(9, 0), map[string]any{
+	defined := analyticsMessage(t, "evt-1", cloudevents.TypeLaborStandardDefined, ts(9, 0), map[string]any{
 		"standard_id":      "std-1",
 		"task_type":        "PICK",
 		"expected_seconds": 45,
 		"effective_from":   ts(9, 0),
 	})
-	revised := analyticsMessage(t, "evt-2", envelope.EventTypeLaborStandardRevised, ts(10, 0), map[string]any{
+	revised := analyticsMessage(t, "evt-2", cloudevents.TypeLaborStandardRevised, ts(10, 0), map[string]any{
 		"standard_id":               "std-2",
 		"task_type":                 "PICK",
 		"previous_expected_seconds": 45,
@@ -223,7 +244,7 @@ func TestAnalyticsConsumerIsIdempotentOnEventId(t *testing.T) {
 	proj := &recordingProjection{}
 	c := newTestAnalyticsConsumer(proj, newFakeProcessedEvents())
 
-	raw := analyticsMessage(t, "evt-dup", envelope.EventTypeTaskPerformanceRecorded, ts(9, 0), map[string]any{
+	raw := analyticsMessage(t, "evt-dup", cloudevents.TypeTaskPerformanceRecorded, ts(9, 0), map[string]any{
 		"task_id":        "task-1",
 		"task_type":      "PICK",
 		"efficiency_pct": 100,
@@ -266,24 +287,11 @@ func TestAnalyticsConsumerSkipsUnknownEventTypes(t *testing.T) {
 func TestAnalyticsConsumerErrors(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("a malformed envelope is an error", func(t *testing.T) {
-		c := newTestAnalyticsConsumer(&recordingProjection{}, newFakeProcessedEvents())
-		if err := c.HandleMessage(ctx, []byte("{not json")); err == nil {
-			t.Fatal("want an error for a malformed envelope")
-		}
-	})
-
 	t.Run("a malformed data payload is an error", func(t *testing.T) {
 		c := newTestAnalyticsConsumer(&recordingProjection{}, newFakeProcessedEvents())
-		raw, err := json.Marshal(envelope.AnalyticsEnvelope{
-			EventId:    "evt-1",
-			EventType:  envelope.EventTypeTaskPerformanceRecorded,
-			OccurredAt: ts(9, 0),
-			Data:       json.RawMessage(`{"actual_seconds":"not-a-number"}`),
-		})
-		if err != nil {
-			t.Fatalf("marshal: %v", err)
-		}
+		raw := rawCloudEvent(t, "evt-1", cloudevents.TypeTaskPerformanceRecorded, "assoc-1",
+			"urn:warehouse:labor-performance:analytics:TaskPerformanceRecorded:v1", ts(9, 0),
+			json.RawMessage(`{"actual_seconds":"not-a-number"}`))
 		if err := c.HandleMessage(ctx, raw); err == nil {
 			t.Fatal("want an error for a malformed data payload")
 		}
@@ -295,7 +303,7 @@ func TestAnalyticsConsumerErrors(t *testing.T) {
 		proj := &recordingProjection{}
 		c := newTestAnalyticsConsumer(proj, gate)
 
-		raw := analyticsMessage(t, "evt-1", envelope.EventTypeTaskPerformanceRecorded, ts(9, 0), map[string]any{
+		raw := analyticsMessage(t, "evt-1", cloudevents.TypeTaskPerformanceRecorded, ts(9, 0), map[string]any{
 			"task_type": "PICK", "completed_at": ts(9, 0),
 		})
 		if err := c.HandleMessage(ctx, raw); err == nil {
@@ -310,7 +318,7 @@ func TestAnalyticsConsumerErrors(t *testing.T) {
 		proj := &recordingProjection{failWith: errors.New("db down")}
 		c := newTestAnalyticsConsumer(proj, newFakeProcessedEvents())
 
-		raw := analyticsMessage(t, "evt-1", envelope.EventTypeTaskPerformanceRecorded, ts(9, 0), map[string]any{
+		raw := analyticsMessage(t, "evt-1", cloudevents.TypeTaskPerformanceRecorded, ts(9, 0), map[string]any{
 			"task_type": "PICK", "completed_at": ts(9, 0),
 		})
 		if err := c.HandleMessage(ctx, raw); err == nil {
@@ -326,7 +334,7 @@ func TestAnalyticsConsumerFallsBackToOccurredAtForAMissingBusinessTime(t *testin
 	// completed_at absent entirely — an older or truncated payload. The
 	// row must land in the envelope's hour rather than at the zero
 	// instant in year 1.
-	raw := analyticsMessage(t, "evt-1", envelope.EventTypeTaskPerformanceRecorded, ts(9, 0), map[string]any{
+	raw := analyticsMessage(t, "evt-1", cloudevents.TypeTaskPerformanceRecorded, ts(9, 0), map[string]any{
 		"task_id":   "task-1",
 		"task_type": "PICK",
 	})
@@ -335,6 +343,45 @@ func TestAnalyticsConsumerFallsBackToOccurredAtForAMissingBusinessTime(t *testin
 		t.Fatalf("HandleMessage: %v", err)
 	}
 	if got := proj.tasks[0].fact.CompletedAt; !got.Equal(ts(9, 0)) {
-		t.Errorf("CompletedAt = %v, want the occurred_at fallback 09:00", got)
+		t.Errorf("CompletedAt = %v, want the CloudEvents time fallback 09:00", got)
+	}
+}
+
+// A message that is not a valid CloudEvent — the retired flat analytics
+// envelope, or plain garbage — is skipped (WARN + commit past via Run),
+// never parsed, never projected, never marked processed.
+func TestAnalyticsConsumerRejectsLegacyFlatEnvelope(t *testing.T) {
+	for name, raw := range map[string][]byte{
+		"legacy flat analytics envelope": legacyFlatMessage("TaskPerformanceRecorded", `{"task_type":"PICK","actual_seconds":45}`),
+		"malformed json":                 []byte("{not json"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			proj := &recordingProjection{}
+			gate := newFakeProcessedEvents()
+			c := newTestAnalyticsConsumer(proj, gate)
+			if err := c.HandleMessage(context.Background(), raw); err != nil {
+				t.Fatalf("an invalid cloudevent must be skipped, not an error: %v", err)
+			}
+			if proj.callCount != 0 {
+				t.Fatalf("projection called %d times for a non-CloudEvents message", proj.callCount)
+			}
+			if len(gate.seen) != 0 {
+				t.Fatalf("a non-CloudEvents message was marked processed: %v", gate.seen)
+			}
+		})
+	}
+}
+
+// The short event name (the retired flat-envelope event_type) is NOT a
+// recognised type: dispatch is on the full CloudEvents type only.
+func TestAnalyticsConsumerIgnoresShortTypeName(t *testing.T) {
+	proj := &recordingProjection{}
+	c := newTestAnalyticsConsumer(proj, newFakeProcessedEvents())
+	raw := analyticsMessage(t, "evt-1", "TaskPerformanceRecorded", ts(9, 0), map[string]any{"task_type": "PICK"})
+	if err := c.HandleMessage(context.Background(), raw); err != nil {
+		t.Fatal(err)
+	}
+	if proj.callCount != 0 {
+		t.Fatal("a bare short type name must not dispatch")
 	}
 }

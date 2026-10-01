@@ -20,7 +20,7 @@ import (
 
 	inboundhttp "github.com/claudioed/labor-performance/internal/adapters/inbound/http"
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	outboundkafka "github.com/claudioed/labor-performance/internal/adapters/outbound/kafka"
@@ -225,7 +225,7 @@ func serve(ctx context.Context, httpServer *http.Server, consumer *inboundkafka.
 	if relay != nil {
 		go func() {
 			defer close(relayDone)
-			logger.Info("outbox relay running", "topics", []string{envelope.TopicLaborPerformanceAnalytics, envelope.TopicLaborPerformanceEvents})
+			logger.Info("outbox relay running", "topics", []string{cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TopicLaborPerformanceEvents})
 			if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
 				errCh <- err
 			}
@@ -370,7 +370,7 @@ func buildEventPublisher(p *persistence, logger *slog.Logger) (ports.EventPublis
 
 	if p.pool == nil {
 		logger.Info("event publisher configured", "publisher", "kafka", "mode", "direct",
-			"topics", []string{envelope.TopicLaborPerformanceAnalytics, envelope.TopicLaborPerformanceEvents}, "brokers", brokers)
+			"topics", []string{cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TopicLaborPerformanceEvents}, "brokers", brokers)
 		return outboundkafka.NewFanOutPublisher(logPublisher, analytics, integration), nil, closePublishers
 	}
 
@@ -378,7 +378,7 @@ func buildEventPublisher(p *persistence, logger *slog.Logger) (ports.EventPublis
 	relay := postgres.NewOutboxRelay(p.pool, sink, logger,
 		postgres.WithInterval(durationEnv("OUTBOX_RELAY_INTERVAL", time.Second)))
 	logger.Info("event publisher configured", "publisher", "kafka", "mode", "outbox",
-		"topics", []string{envelope.TopicLaborPerformanceAnalytics, envelope.TopicLaborPerformanceEvents}, "brokers", brokers)
+		"topics", []string{cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TopicLaborPerformanceEvents}, "brokers", brokers)
 	outbox := postgres.NewOutboxPublisher(p.pool, analytics, integration)
 	return outboundkafka.NewFanOutPublisher(logPublisher, outbox), relay, func() {
 		if err := sink.Close(); err != nil {

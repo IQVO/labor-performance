@@ -59,20 +59,26 @@ never gets write access to a `Task` or `Station` aggregate.
 This service subscribes to **`warehouse.fulfillment.events`** — the SAME
 shared, fan-out topic `wes-work-planning` already consumes from — under its
 own consumer group id (`KAFKA_CONSUMER_GROUP`, `labor-performance` by
-default). Only `event_type == "TaskCompleted"` is acted on; every other
+default). Only the CloudEvents type
+`com.warehouse.wes.fulfillment-execution.task.TaskCompleted` is acted on; every other
 event type on this shared topic is silently skipped, not an error,
 mirroring `wes-work-planning`'s own consumer's skip-unrecognized-event-type
 behavior.
 
-The envelope (identical CloudEvents-like shape across every
-warehouse-systems publisher):
+Every message is a CloudEvents 1.0 event in structured mode (ADR 0021;
+Kafka header `content-type: application/cloudevents+json; charset=UTF-8`).
+A message that is not a valid CloudEvent is dead-lettered, never parsed:
 
 ```json
 {
-  "event_id": "uuid-v4",
-  "event_type": "TaskCompleted",
-  "occurred_at": "2026-08-29T22:00:00Z",
-  "source": "fulfillment-execution",
+  "specversion": "1.0",
+  "id": "4f1c2a7e-9d31-4a6b-8f0e-6b2c1d5e7a90",
+  "source": "/warehouse/fulfillment-execution",
+  "type": "com.warehouse.wes.fulfillment-execution.task.TaskCompleted",
+  "subject": "task-1",
+  "time": "2026-08-29T22:00:00Z",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:fulfillment-execution:events:TaskCompleted:v1",
   "data": {
     "task_id": "...",
     "station_id": "...",
@@ -104,7 +110,7 @@ resolves to `""` — recorded and counted, but never scored against a
 
 The same event also drives idleness (ADR 0014): the gap between an
 associate's previous completion and this task's claim instant
-(`occurred_at − duration_seconds`) is recorded as an `IdlePeriod`, with no
+(the CloudEvents `time` − `duration_seconds`) is recorded as an `IdlePeriod`, with no
 additional upstream field required.
 
 ## → `workforce-management` (live, outbound Kafka)

@@ -105,7 +105,7 @@ autoscaling:
   # per-instance uniqueness (internal/adapters/inbound/kafka/
   # analytics_consumer.go) -- so N replicas legitimately share the
   # analytics topic's partitions via normal rebalancing, the same safe
-  # shape as api's consumer group. Every write is idempotent on event_id
+  # shape as api's consumer group. Every write is idempotent on the CloudEvents id
   # via ProcessedEvents.MarkProcessed, so correctness does not regress at
   # N>1. Capped at 2, not left at api's 4, for the same reasons
   # order-management's projector was: the topic is keyed by TaskType

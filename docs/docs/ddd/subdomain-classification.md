@@ -73,9 +73,9 @@ event-sourced fact from Kafka, not something a human edits.
 
 - **Immutable once recorded.** No update/delete use case anywhere in the
   application layer.
-- **Idempotent on the Kafka message's `event_id`**, not `TaskId` (which
+- **Idempotent on the CloudEvents `id`** (ADR 0021), not `TaskId` (which
   could in principle be reused after a very long time). Recording the same
-  `event_id` twice is a no-op, never a double-count — mirrors the
+  event `id` twice is a no-op, never a double-count — mirrors the
   `ProcessedEvents` idempotency-gate pattern every analytics projector in
   this fleet already uses.
 - **`EfficiencyPct` never divides by zero.** `ActualSeconds<=0` (an

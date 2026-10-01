@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	ce "github.com/cloudevents/sdk-go/v2/event"
+
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
@@ -38,27 +40,31 @@ func newFixture() fixture {
 	}
 }
 
-func taskCompletedEnvelope(t *testing.T, eventId, taskId, associateId string, durationSeconds int64) envelope.Envelope {
+func taskCompletedEnvelope(t *testing.T, eventId, taskId, associateId string, durationSeconds int64) ce.Event {
 	t.Helper()
 	return taskCompletedEnvelopeWithType(t, eventId, taskId, associateId, durationSeconds, "")
 }
 
-func taskCompletedEnvelopeWithType(t *testing.T, eventId, taskId, associateId string, durationSeconds int64, taskType string) envelope.Envelope {
+func taskCompletedEnvelopeWithType(t *testing.T, eventId, taskId, associateId string, durationSeconds int64, taskType string) ce.Event {
 	t.Helper()
-	data, err := json.Marshal(taskCompletedData{
+	return taskCompletedEvent(t, eventId, taskId, taskCompletedData{
 		TaskId: taskId, StationId: "station-1", WorkUnitId: "wu-1",
 		AssociateId: associateId, DurationSeconds: durationSeconds, TaskType: taskType,
 	})
+}
+
+// taskCompletedEvent builds a decoded fulfillment-execution TaskCompleted
+// CloudEvent carrying data as its payload.
+func taskCompletedEvent(t *testing.T, eventId, subject string, data any) ce.Event {
+	t.Helper()
+	raw := rawCloudEvent(t, eventId, cloudevents.TypeFulfillmentTaskCompleted, subject,
+		"urn:warehouse:fulfillment-execution:events:TaskCompleted:v1",
+		time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC), data)
+	evt, err := cloudevents.Decode(raw)
 	if err != nil {
-		t.Fatalf("marshal data: %v", err)
+		t.Fatalf("decode: %v", err)
 	}
-	return envelope.Envelope{
-		EventId:    eventId,
-		EventType:  envelope.EventTypeTaskCompleted,
-		OccurredAt: time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC),
-		Source:     "fulfillment-execution",
-		Data:       data,
-	}
+	return evt
 }
 
 func TestHandleFulfillmentEvent_RecordsTaskPerformance(t *testing.T) {
@@ -81,7 +87,7 @@ func TestHandleFulfillmentEvent_IgnoresOtherEventTypes(t *testing.T) {
 	f := newFixture()
 
 	env := taskCompletedEnvelope(t, "evt-other", "task-1", "assoc-1", 52)
-	env.EventType = "SomethingElse"
+	env.SetType("com.warehouse.wes.fulfillment-execution.task.SomethingElse")
 
 	if err := f.consumer.handleFulfillmentEvent(context.Background(), env); err != nil {
 		t.Fatalf("handleFulfillmentEvent: %v", err)
@@ -119,15 +125,12 @@ func TestHandleFulfillmentEvent_RedeliveryIsIdempotent(t *testing.T) {
 func TestHandleFulfillmentEvent_DegradesGracefullyOnOlderPayload(t *testing.T) {
 	// A TaskCompleted predating fulfillment-execution's
 	// feature/labor-performance-hooks enrichment omits associate_id and
-	// duration_seconds entirely. The envelope's data must still unmarshal
+	// duration_seconds entirely. The event's data must still unmarshal
 	// (both fields default to their Go zero values) and the event must
 	// still be recorded, never dropped or errored.
 	f := newFixture()
-	data := []byte(`{"task_id":"task-1","station_id":"station-1","work_unit_id":"wu-1"}`)
-	env := envelope.Envelope{
-		EventId: "evt-old", EventType: envelope.EventTypeTaskCompleted,
-		OccurredAt: time.Now(), Source: "fulfillment-execution", Data: data,
-	}
+	env := taskCompletedEvent(t, "evt-old", "task-1",
+		json.RawMessage(`{"task_id":"task-1","station_id":"station-1","work_unit_id":"wu-1"}`))
 
 	if err := f.consumer.handleFulfillmentEvent(context.Background(), env); err != nil {
 		t.Fatalf("handleFulfillmentEvent: %v", err)
@@ -195,5 +198,19 @@ func TestHandleFulfillmentEvent_UnrecognizedTaskTypeDegradesToUnclassified(t *te
 	unclassified, ok := sc.ByTaskType[shared.TaskType("")]
 	if !ok || unclassified.TaskCount != 1 {
 		t.Fatal("expected the REBIN completion to be recorded under the unclassified (\"\") bucket")
+	}
+}
+
+// Dispatch is on the FULL CloudEvents type: the bare short name the
+// retired flat envelope used must not match.
+func TestHandleFulfillmentEvent_IgnoresShortTypeName(t *testing.T) {
+	f := newFixture()
+	env := taskCompletedEnvelope(t, "evt-short", "task-1", "assoc-1", 52)
+	env.SetType("TaskCompleted")
+	if err := f.consumer.handleFulfillmentEvent(context.Background(), env); err != nil {
+		t.Fatalf("handleFulfillmentEvent: %v", err)
+	}
+	if exists, _ := f.performances.ExistsByAssociateID(context.Background(), "assoc-1"); exists {
+		t.Fatal("a short type name must not dispatch")
 	}
 }

@@ -12,7 +12,8 @@
 // entirely from facts this service already has on the wire --
 // fulfillment-execution's TaskCompleted carries duration_seconds, so the
 // previous task's claim instant is recoverable as
-// occurred_at - duration_seconds with no upstream change required.
+// time - duration_seconds (time = the CloudEvents attribute, ADR 0021)
+// with no upstream change required.
 package idleness
 
 import (
