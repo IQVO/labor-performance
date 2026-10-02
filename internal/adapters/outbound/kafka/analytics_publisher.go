@@ -94,6 +94,7 @@ type AnalyticsPublisher struct {
 func NewAnalyticsPublisher(brokers []string, newID func() string) *AnalyticsPublisher {
 	return &AnalyticsPublisher{
 		Writer: &kafkago.Writer{
+			BatchTimeout:           syncWriterBatchTimeout,
 			Addr:                   kafkago.TCP(brokers...),
 			Topic:                  cloudevents.TopicLaborPerformanceAnalytics,
 			Balancer:               &kafkago.Hash{},
