@@ -56,6 +56,7 @@ func NewIntegrationPublisher(brokers []string, newID func() string) *Integration
 	return &IntegrationPublisher{
 		Writer: &kafkago.Writer{
 			BatchTimeout:           syncWriterBatchTimeout,
+			RequiredAcks:           syncWriterRequiredAcks,
 			Addr:                   kafkago.TCP(brokers...),
 			Topic:                  cloudevents.TopicLaborPerformanceEvents,
 			Balancer:               &kafkago.Hash{},
