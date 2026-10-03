@@ -1,3 +1,9 @@
+---
+paths:
+  - "docs/**"
+  - "apis/**"
+---
+
 # Docs & API drift: two OpenAPI specs, one AsyncAPI spec, one Docusaurus site
 
 ## Why there are TWO OpenAPI specs
