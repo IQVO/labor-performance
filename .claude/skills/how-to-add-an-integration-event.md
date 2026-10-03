@@ -22,7 +22,7 @@ so strictly that `internal/architecture/fitness_test.go`'s
 HTTP client package ever appears under `internal/adapters/outbound/`
 here. If a future feature seems to need "ask fulfillment-execution for
 X at scoring time," that is a signal the feature belongs on the Kafka
-envelope instead (get fulfillment-execution to publish X), not a case
+event payload instead (get fulfillment-execution to publish X), not a case
 for special-casing a synchronous call in this repo. See ADR 0002 and ADR
 0003 for the full reasoning.
 
@@ -40,15 +40,21 @@ the integration publisher, confirm a sibling context genuinely needs to
 react to it; check `docs/docs/adr/0013-labor-performance-integration-events.md`
 for who is actually downstream today.
 
-### 2. Envelope: CloudEvents-shaped, structured mode
+### 2. Envelope: CloudEvents 1.0, structured mode (MANDATORY, ADR 0021)
 
-Messages use this service's own envelope type
-(`internal/adapters/kafka/envelope`), matching the platform-wide
-CloudEvents-like shape: `event_id`, `event_type`, `occurred_at`,
-`source`, `data`. The `event_type` follows the reverse-DNS convention
-`com.warehouse.<subdomain>.<bounded-context>.<entity>.<EventName>` — get
-this service's own subdomain from `apis/asyncapi.yaml`'s intro section,
-don't guess it.
+Every message is a CloudEvents 1.0 event built ONLY through
+`internal/adapters/kafka/cloudevents` (`cloudevents.New(Spec{...})`,
+which uses `github.com/cloudevents/sdk-go/v2/event` and validates). Never
+hand-roll an envelope struct, never add a flat/dual mode. Required
+attributes: `specversion=1.0`, `id` (UUID minted once at `Encode`, so the
+outbox republishes the same id), `source=/warehouse/labor-performance`,
+`type=com.warehouse.wes.labor-performance.<entity>.<EventName>`, `subject`
+(aggregate id, never empty), `time` (domain occurred-at), 
+`datacontenttype=application/json`,
+`dataschema=urn:warehouse:labor-performance:<events|analytics>:<EventName>:v1`.
+Every produced message carries `cloudevents.ContentTypeHeader()`
+alongside the trace headers. Add the full `Type...` constant to the
+`cloudevents` package.
 
 ### 3. Implementation
 
@@ -57,11 +63,12 @@ doesn't already exist as a domain event — publishing wires an EXISTING
 domain event onto Kafka, it doesn't invent a new payload shape at the
 adapter layer. In `internal/adapters/outbound/kafka/`:
 
-- Add the marshal-to-envelope case to the publisher
+- Add the case to the publisher's `integrationData`/`marshalData`
+  (event name, entity, key, subject, payload map)
 - Give the message a partition key that keeps ordering where it matters
   (usually the aggregate id — `AssociateId` or `StandardId` here)
-- Use this service's own topic constants from `envelope`
-  (`envelope.TopicLaborPerformanceEvents`/`...Analytics`), never a
+- Use this service's own topic constants from `cloudevents`
+  (`cloudevents.TopicLaborPerformanceEvents`/`...Analytics`), never a
   sibling's
 
 ### 4. Contract + docs
@@ -77,7 +84,7 @@ adapter layer. In `internal/adapters/outbound/kafka/`:
   topic, `0013-labor-performance-integration-events.md` for the
   integration topic) — see `.claude/rules/docs-and-api-drift.md` for the
   full list. There is no generator to catch drift automatically here: a
-  new channel or changed envelope field means grepping for the topic
+  new channel or changed payload field means grepping for the topic
   name (`warehouse.labor-performance.events`,
   `warehouse.labor-performance.analytics`) and the event type names
   across `docs/docs/**/*.md*` and hand-updating every page that
@@ -85,7 +92,10 @@ adapter layer. In `internal/adapters/outbound/kafka/`:
 
 ### 5. Test
 
-Unit test the marshal shape against a fake `Writer`/`kafkago.Writer` —
+Add a golden exact-JSON test (see
+`internal/adapters/outbound/kafka/golden_cloudevents_test.go`) pinning
+every attribute, the full type and the content-type header. Unit test the
+marshal shape against a fake `Writer`/`kafkago.Writer` —
 never a real broker in a unit test (see the pattern in
 `internal/adapters/outbound/kafka/`'s existing publisher tests). If this
 event needs an integration test asserting real delivery, it MUST use
@@ -102,8 +112,10 @@ ONLY, never Kafka, so a skip-gated `KAFKA_BROKERS` test or a hardcoded
 This service's real production consumer is exactly this shape:
 `internal/adapters/inbound/kafka/consumer.go` subscribes to
 `warehouse.fulfillment.events` (a topic shared/fan-out with
-`wes-work-planning`) and reacts only to `event_type ==
-"TaskCompleted"`, feeding it into `RecordTaskPerformance`. Read that
+`wes-work-planning`), decodes with `cloudevents.Decode` (anything that is
+not a valid CloudEvent goes to the DLQ, never parsed), and reacts only to
+the FULL type `com.warehouse.wes.fulfillment-execution.task.TaskCompleted`,
+feeding it into `RecordTaskPerformance`. Read that
 file's own doc comment and ADR 0003 end to end before writing a new
 consumer — they are the canonical worked example for this whole
 section, not just a fleet-wide abstraction.
@@ -165,10 +177,10 @@ per-process-unique group pattern above, which sidesteps the whole class
 of readiness-deadlock bug that a shared, already-caught-up group would
 otherwise hit.
 
-### 4. Idempotency: gate on the envelope's event_id, not the payload's natural key
+### 4. Idempotency: gate on the CloudEvents id, not the payload's natural key
 
 `RecordTaskPerformance`'s idempotency (`ports.ProcessedEvents`) is keyed
-on the Kafka message's `event_id`, not `TaskId` — a `TaskId` could in
+on the CloudEvents `id`, not `TaskId` — a `TaskId` could in
 principle be reused after a very long time. Unlike
 `workforce-management`'s use of the identically-shaped pattern (which
 gates only an additive analytics side-projection), here it gates the

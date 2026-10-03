@@ -2,11 +2,12 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	ce "github.com/cloudevents/sdk-go/v2/event"
+
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
 
@@ -15,17 +16,9 @@ func newTestIntegrationPublisher() (*IntegrationPublisher, *recordingWriter) {
 	return &IntegrationPublisher{Writer: w, NewID: seqIDs()}, w
 }
 
-func decodePlain(t *testing.T, value []byte) (envelope.Envelope, map[string]any) {
+func decodePlain(t *testing.T, value []byte) (ce.Event, map[string]any) {
 	t.Helper()
-	var env envelope.Envelope
-	if err := json.Unmarshal(value, &env); err != nil {
-		t.Fatalf("decode envelope: %v", err)
-	}
-	var data map[string]any
-	if err := json.Unmarshal(env.Data, &data); err != nil {
-		t.Fatalf("decode data: %v", err)
-	}
-	return env, data
+	return decodeCloudEvent(t, value)
 }
 
 func TestIntegrationPublisherPublishesTaskPerformanceRecorded(t *testing.T) {
@@ -43,18 +36,25 @@ func TestIntegrationPublisherPublishesTaskPerformanceRecorded(t *testing.T) {
 	}
 
 	env, data := decodePlain(t, w.msgs[0].Value)
-	if env.EventType != envelope.EventTypeTaskPerformanceRecorded {
-		t.Errorf("event_type = %q, want %q", env.EventType, envelope.EventTypeTaskPerformanceRecorded)
+	if env.Type() != cloudevents.TypeTaskPerformanceRecorded {
+		t.Errorf("type = %q, want %q", env.Type(), cloudevents.TypeTaskPerformanceRecorded)
 	}
-	if env.Source != envelope.Source {
-		t.Errorf("source = %q, want %q", env.Source, envelope.Source)
+	if env.Source() != cloudevents.Source {
+		t.Errorf("source = %q, want %q", env.Source(), cloudevents.Source)
 	}
-	if env.EventId == "" {
-		t.Error("event_id is empty; it is the downstream consumer's idempotency key")
+	if env.ID() == "" {
+		t.Error("id is empty; it is the downstream consumer's idempotency key")
 	}
-	if !env.OccurredAt.Equal(event.OccurredAt()) {
-		t.Errorf("occurred_at = %v, want %v", env.OccurredAt, event.OccurredAt())
+	if !env.Time().Equal(event.OccurredAt()) {
+		t.Errorf("time = %v, want %v", env.Time(), event.OccurredAt())
 	}
+	if env.Subject() != "assoc-1" {
+		t.Errorf("subject = %q, want the associate id", env.Subject())
+	}
+	if env.DataSchema() != "urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1" {
+		t.Errorf("dataschema = %q", env.DataSchema())
+	}
+	assertContentTypeHeader(t, w.msgs[0].Headers)
 	// Partition key is AssociateId on the integration topic — NOT
 	// TaskType, which is what the analytics topic keys on. This is
 	// deliberate: the intended first consumer (workforce-management)
@@ -103,6 +103,12 @@ func TestIntegrationPublisherPreservesNilEfficiency(t *testing.T) {
 	if got := string(w.msgs[0].Key); got != "" {
 		t.Errorf("partition key = %q, want empty string", got)
 	}
+	// ...but the CloudEvents subject is never empty: it falls back to
+	// the task id.
+	env, _ := decodePlain(t, w.msgs[0].Value)
+	if env.Subject() != "task-1" {
+		t.Errorf("subject = %q, want the task id fallback", env.Subject())
+	}
 }
 
 func TestIntegrationPublisherSkipsEventsOutsideTheContract(t *testing.T) {
@@ -136,8 +142,8 @@ func TestIntegrationPublisherMintsAUniqueEventIdPerMessage(t *testing.T) {
 
 	first, _ := decodePlain(t, w.msgs[0].Value)
 	second, _ := decodePlain(t, w.msgs[1].Value)
-	if first.EventId == second.EventId {
-		t.Errorf("both messages carry event_id %q; a shared id would make a downstream consumer drop one", first.EventId)
+	if first.ID() == second.ID() {
+		t.Errorf("both messages carry id %q; a shared id would make a downstream consumer drop one", first.ID())
 	}
 }
 
@@ -184,11 +190,11 @@ func TestIntegrationPublisherEncodeDoesNotWrite(t *testing.T) {
 		t.Fatalf("got %d encoded messages, want 1 (the unknown event is skipped)", len(msgs))
 	}
 	m := msgs[0]
-	if m.Topic != envelope.TopicLaborPerformanceEvents {
-		t.Errorf("topic = %q, want %q", m.Topic, envelope.TopicLaborPerformanceEvents)
+	if m.Topic != cloudevents.TopicLaborPerformanceEvents {
+		t.Errorf("topic = %q, want %q", m.Topic, cloudevents.TopicLaborPerformanceEvents)
 	}
-	if m.EventType != envelope.EventTypeTaskPerformanceRecorded {
-		t.Errorf("event_type = %q, want %q", m.EventType, envelope.EventTypeTaskPerformanceRecorded)
+	if m.EventType != cloudevents.TypeTaskPerformanceRecorded {
+		t.Errorf("type = %q, want %q", m.EventType, cloudevents.TypeTaskPerformanceRecorded)
 	}
 }
 

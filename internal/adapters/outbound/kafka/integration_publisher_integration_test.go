@@ -4,7 +4,6 @@ package kafka_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"strconv"
@@ -16,7 +15,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tckafka "github.com/testcontainers/testcontainers-go/modules/kafka"
 
-	"github.com/claudioed/labor-performance/internal/adapters/kafka/envelope"
+	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	outboundkafka "github.com/claudioed/labor-performance/internal/adapters/outbound/kafka"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
@@ -27,7 +26,7 @@ import (
 // mirroring how cmd/labor/main.go's buildEventPublisher constructs it), a
 // TaskPerformanceRecorded domain event actually lands on
 // warehouse.labor-performance.events — the integration topic added by
-// ADR 0013 — on a real Kafka broker, with the exact wire envelope a
+// ADR 0013 — on a real Kafka broker, as the exact CloudEvents 1.0 event a
 // downstream consumer (e.g. workforce-management) would decode.
 func TestIntegrationPublisher_PublishesTaskPerformanceRecordedToRealBroker(t *testing.T) {
 	testCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -50,7 +49,7 @@ func TestIntegrationPublisher_PublishesTaskPerformanceRecordedToRealBroker(t *te
 	}
 
 	// Use a throwaway, uniquely-named topic rather than the real
-	// envelope.TopicLaborPerformanceEvents constant, so this test never
+	// cloudevents.TopicLaborPerformanceEvents constant, so this test never
 	// collides with another run against the same container/topic name
 	// convention. The publisher under test is otherwise wired exactly
 	// as production (NewIntegrationPublisher), just pointed at this
@@ -103,22 +102,37 @@ func TestIntegrationPublisher_PublishesTaskPerformanceRecordedToRealBroker(t *te
 		t.Errorf("partition key = %q, want %q (AssociateId)", msg.Key, associateID)
 	}
 
-	var env envelope.Envelope
-	if err := json.Unmarshal(msg.Value, &env); err != nil {
-		t.Fatalf("decode envelope: %v", err)
+	env, err := cloudevents.Decode(msg.Value)
+	if err != nil {
+		t.Fatalf("decode cloudevent: %v", err)
 	}
-	if env.EventType != envelope.EventTypeTaskPerformanceRecorded {
-		t.Errorf("event_type = %q, want %q", env.EventType, envelope.EventTypeTaskPerformanceRecorded)
+	if env.Type() != cloudevents.TypeTaskPerformanceRecorded {
+		t.Errorf("type = %q, want %q", env.Type(), cloudevents.TypeTaskPerformanceRecorded)
 	}
-	if env.Source != envelope.Source {
-		t.Errorf("source = %q, want %q", env.Source, envelope.Source)
+	if env.Source() != cloudevents.Source {
+		t.Errorf("source = %q, want %q", env.Source(), cloudevents.Source)
 	}
-	if env.EventId == "" {
-		t.Error("event_id is empty")
+	if env.ID() == "" {
+		t.Error("id is empty")
+	}
+	if env.Subject() != associateID {
+		t.Errorf("subject = %q, want %q", env.Subject(), associateID)
+	}
+	if env.DataSchema() != "urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1" {
+		t.Errorf("dataschema = %q", env.DataSchema())
+	}
+	var contentType string
+	for _, h := range msg.Headers {
+		if h.Key == "content-type" {
+			contentType = string(h.Value)
+		}
+	}
+	if contentType != cloudevents.MediaType {
+		t.Errorf("content-type header = %q, want %q", contentType, cloudevents.MediaType)
 	}
 
 	var data map[string]any
-	if err := json.Unmarshal(env.Data, &data); err != nil {
+	if err := env.DataAs(&data); err != nil {
 		t.Fatalf("decode data: %v", err)
 	}
 	if data["task_id"] != taskID {

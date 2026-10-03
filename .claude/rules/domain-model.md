@@ -26,8 +26,9 @@ configures — it does not define the fulfillment work itself.
 - Pure Kafka **consumer** of `fulfillment-execution`'s `TaskCompleted`
   event on `warehouse.fulfillment.events` (shared/fan-out topic,
   `wes-work-planning` also consumes it under its own consumer group). Only
-  `event_type == "TaskCompleted"` is acted on; every other type is silently
-  skipped, not an error.
+  the full CloudEvents type
+  `com.warehouse.wes.fulfillment-execution.task.TaskCompleted` is acted on;
+  every other type is silently skipped, not an error.
 - Separate Go module/repo: no Go import from and no write access to
   `fulfillment-execution` or `workforce-management`'s aggregates. No
   outbound REST or MCP call to ANY sibling context — everything needed
@@ -73,7 +74,7 @@ See ADR 0002, ADR 0003, ADR 0013, ADR 0015.
 ## TaskPerformance invariants
 
 - **Immutable once recorded.**
-- **Idempotent on the Kafka message's `event_id`**, not `TaskId` (which
+- **Idempotent on the CloudEvents `id`** (stored in the `event_id` column), not `TaskId` (which
   could in principle be reused after a very long time). Recording the same
   `event_id` twice is a no-op, mirroring the `ProcessedEvents`
   idempotency-gate pattern every analytics projector in this fleet uses.
@@ -149,15 +150,19 @@ MCP (`cmd/mcp`): read-only tools `get_associate_scorecard`,
 
 ## Inbound Kafka contract (`apis/asyncapi.yaml`, inbound section)
 
-Subscribes to `warehouse.fulfillment.events`. Envelope (CloudEvents-like,
-shared across the fleet):
+Subscribes to `warehouse.fulfillment.events`. Every message is a
+CloudEvents 1.0 event, structured mode (ADR 0021) — the only envelope:
 
 ```json
 {
-  "event_id": "uuid-v4",
-  "event_type": "TaskCompleted",
-  "occurred_at": "2026-08-29T22:00:00Z",
-  "source": "fulfillment-execution",
+  "specversion": "1.0",
+  "id": "4f1c2a7e-9d31-4a6b-8f0e-6b2c1d5e7a90",
+  "source": "/warehouse/fulfillment-execution",
+  "type": "com.warehouse.wes.fulfillment-execution.task.TaskCompleted",
+  "subject": "task-1",
+  "time": "2026-08-29T22:00:00Z",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:fulfillment-execution:events:TaskCompleted:v1",
   "data": {
     "task_id": "...", "station_id": "...", "work_unit_id": "...",
     "associate_id": "...", "duration_seconds": 52, "task_type": "PICK"

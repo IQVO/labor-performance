@@ -13,6 +13,8 @@ description: "Why labor-performance — the fleet's only pure event sink — now
 **Accepted** — implemented in the same change that introduced this
 record.
 
+> **Envelope superseded by [ADR-0021](./0021-cloudevents-mandatory-event-envelope.md).** The flat envelope (`event_id`/`event_type`/`occurred_at`) described below is retired: every message is now a CloudEvents 1.0 event. The rest of this decision stands.
+
 ## Context
 
 Every other bounded context in the `warehouse-systems` fleet both
@@ -77,21 +79,20 @@ event) that needs no change on this service's write path.
 
 ### Wire format
 
-The integration topic uses the **plain** `envelope.Envelope` shape (the
-same outer shape this service already consumes on
-`warehouse.fulfillment.events`, and the same shape
-`fulfillment-execution` itself publishes with) — **not** the
-`AnalyticsEnvelope` variant the analytics topic uses, which carries an
-extra `schema_version` field. This is a Published Language for external
-consumers, not the internal analytics stream, so it deliberately mirrors
-the fleet-wide integration envelope convention instead:
+> Superseded by [ADR-0021](./0021-cloudevents-mandatory-event-envelope.md):
+> the integration topic now carries a CloudEvents 1.0 event (the original
+> flat-envelope text is no longer the wire format). Current shape:
 
 ```json
 {
-  "event_id": "uuid-v4",
-  "event_type": "TaskPerformanceRecorded",
-  "occurred_at": "2026-09-05T11:00:00Z",
-  "source": "labor-performance",
+  "specversion": "1.0",
+  "id": "7a2d5e91-3f04-4c8b-9e12-8b4a6d1c5f30",
+  "source": "/warehouse/labor-performance",
+  "type": "com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded",
+  "subject": "assoc-4471",
+  "time": "2026-09-05T11:00:00Z",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1",
   "data": {
     "task_id": "task-10231",
     "associate_id": "assoc-4471",

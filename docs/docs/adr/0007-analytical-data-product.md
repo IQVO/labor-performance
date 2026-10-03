@@ -12,6 +12,8 @@ description: ADR 0007 — an analytical read model (the "Labor Performance Repor
 
 Accepted.
 
+> **Envelope superseded by [ADR-0021](./0021-cloudevents-mandatory-event-envelope.md).** The flat envelope (`event_id`/`event_type`/`occurred_at`/`schema_version`) described below is retired: every message is now a CloudEvents 1.0 event. The rest of this decision stands.
+
 ## Context
 
 Every other bounded context in the warehouse-systems fleet ships a
