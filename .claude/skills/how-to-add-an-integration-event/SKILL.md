@@ -129,8 +129,8 @@ section, not just a fleet-wide abstraction.
 
 `consumer.go`'s `taskCompletedData` struct is this context's own private
 mirror of fulfillment-execution's wire shape — hand-verified against
-fulfillment-execution's actual `internal/adapters/outbound/kafka/publisher.go`
-`TaskCompletedData` struct, not assumed. This service never adds a Go
+fulfillment-execution's actual published `TaskCompletedData` struct (in that
+repo's outbound Kafka publisher), not assumed. This service never adds a Go
 module dependency on `fulfillment-execution` or `workforce-management`;
 `internal/architecture/fitness_test.go`'s `TestNoSiblingContextOutboundCalls`
 enforces the outbound half of this statically, and the hexagonal

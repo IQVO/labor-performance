@@ -30,9 +30,9 @@ ci.yml` for the current step list if a new spec is ever added.
 edit to add only one):
 
 - `labor` → `specPath: '../apis/openapi.yaml'`, outputs to
-  `docs/api-reference/rest/`.
+  `docs/docs/api-reference/rest/`.
 - `laborReports` → `specPath: '../apis/openapi-reports.yaml'`, outputs to
-  `docs/api-reference/rest-reports/`.
+  `docs/docs/api-reference/rest-reports/`.
 
 `docs/package.json` scripts:
 
@@ -52,7 +52,7 @@ to exist or the Docusaurus build fails at import time.
 
 CI's `docs-api-drift` job runs `npm run clean-api-docs:all && npm run
 gen-api-docs:all` in `docs/` and fails on any `git diff` under
-`docs/api-reference/rest` or `docs/api-reference/rest-reports`. Reproduce
+`docs/docs/api-reference/rest` or `docs/docs/api-reference/rest-reports`. Reproduce
 it locally before pushing a spec change.
 
 **When either `apis/openapi.yaml` or `apis/openapi-reports.yaml` changes:**

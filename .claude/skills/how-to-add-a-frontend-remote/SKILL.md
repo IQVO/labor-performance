@@ -7,8 +7,8 @@ description: Add or change a micro-frontend remote under web/ (vite federation c
 
 Use when adding a new screen/feature to this repo's `web/` Module
 Federation remote (`labor-mfe`), which already exists and is the
-concrete worked example below — see `warehouse-console`'s
-`.claude/rules/mfe-remotes.md` for the shell-side half of this contract.
+concrete worked example below — the shell-side half of this contract (how the console
+mounts remotes) lives in the `warehouse-console` repo.
 
 ## `vite.config.ts` must stay in OBJECT form, always
 
