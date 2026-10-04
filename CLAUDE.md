@@ -113,7 +113,11 @@ Claude Code loads each rule below automatically when you touch the matching path
 
 | When touching | Read |
 |---|---|
+| `docs/docs/adr/**` | `.claude/rules/adrs-and-decisions.md` |
+| `cmd/**`, `internal/**`, `migrations/**` ... | `.claude/rules/architecture-and-testing.md` |
+| `internal/adapters/**`, `internal/domain/shared/**`, `apis/asyncapi.yaml` ... | `.claude/rules/cloudevents-envelope.md` |
 | `docs/**`, `apis/**` | `.claude/rules/docs-and-api-drift.md` |
+| `internal/**`, `cmd/**`, `apis/**` ... | `.claude/rules/domain-model.md` |
 
 Hooks (`scripts/harness/hook.py`, wired for Claude Code, Codex and OpenCode) block pushes to develop/main, `--no-verify`, bare `rm -rf`, and edits to generated files, and feed gofmt/vet findings back after each edit. Before saying "done" run `make check-fast`; the full gate is `make check-all`. `HARNESS_OFF=1` disables the hooks when debugging the harness itself.
 <!-- harness:scoped-rules:end -->
