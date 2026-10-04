@@ -14,10 +14,10 @@ const config: Config = {
     faster: true,
   },
 
-  url: 'https://claudioed.github.io',
+  url: 'https://iqvo.github.io',
   baseUrl: '/labor-performance/',
 
-  organizationName: 'claudioed',
+  organizationName: 'IQVO',
   projectName: 'labor-performance',
   deploymentBranch: 'gh-pages',
   trailingSlash: false,
@@ -44,7 +44,7 @@ const config: Config = {
         docs: {
           sidebarPath: './sidebars.ts',
           editUrl:
-            'https://github.com/claudioed/labor-performance/tree/main/docs/',
+            'https://github.com/IQVO/labor-performance/tree/main/docs/',
           docItemComponent: '@theme/ApiItem',
         },
         blog: false,
@@ -125,7 +125,7 @@ const config: Config = {
           position: 'left',
         },
         {
-          href: 'https://github.com/claudioed/labor-performance',
+          href: 'https://github.com/IQVO/labor-performance',
           label: 'GitHub',
           position: 'right',
         },
@@ -148,18 +148,18 @@ const config: Config = {
           title: 'Ecosystem',
           items: [
             {label: 'Context map', to: '/docs/ecosystem/context-map'},
-            {label: 'fulfillment-execution', href: 'https://github.com/claudioed/fulfillment-execution'},
-            {label: 'workforce-management', href: 'https://github.com/claudioed/workforce-management'},
-            {label: 'wes-work-planning', href: 'https://github.com/claudioed/wes-work-planning'},
-            {label: 'inventory-storage', href: 'https://github.com/claudioed/inventory-storage'},
+            {label: 'fulfillment-execution', href: 'https://github.com/IQVO/fulfillment-execution'},
+            {label: 'workforce-management', href: 'https://github.com/IQVO/workforce-management'},
+            {label: 'wes-work-planning', href: 'https://github.com/IQVO/wes-work-planning'},
+            {label: 'inventory-storage', href: 'https://github.com/IQVO/inventory-storage'},
           ],
         },
         {
           title: 'Source',
           items: [
-            {label: 'GitHub repository', href: 'https://github.com/claudioed/labor-performance'},
-            {label: 'OpenAPI spec', href: 'https://github.com/claudioed/labor-performance/blob/main/apis/openapi.yaml'},
-            {label: 'AsyncAPI spec', href: 'https://github.com/claudioed/labor-performance/blob/main/apis/asyncapi.yaml'},
+            {label: 'GitHub repository', href: 'https://github.com/IQVO/labor-performance'},
+            {label: 'OpenAPI spec', href: 'https://github.com/IQVO/labor-performance/blob/main/apis/openapi.yaml'},
+            {label: 'AsyncAPI spec', href: 'https://github.com/IQVO/labor-performance/blob/main/apis/asyncapi.yaml'},
           ],
         },
       ],
