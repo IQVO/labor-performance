@@ -1,3 +1,12 @@
+---
+paths:
+  - "internal/**"
+  - "cmd/**"
+  - "apis/**"
+  - "features/**"
+  - "migrations/**"
+---
+
 # Domain model: ubiquitous language, aggregates, invariants, use cases
 
 ## Why this context exists
@@ -176,7 +185,7 @@ service's JSON unmarshaling degrades them to `""`/`0` (the same "no
 occupant"/"unmeasurable"/"unclassified" business facts already modeled,
 not an error).
 
-`task_type` is on the wire since `fulfillment-execution` ADR-0023 and goes
+`task_type` is on the wire since `fulfillment-execution`'s task-type enrichment and goes
 through `shared.ParseTaskTypeLenient`. An unrecognized value (e.g. `REBIN`)
 or an absent field resolves to `""` (unclassified) — still recorded and
 counted, but never resolves a `LaborStandard` and never appears under
