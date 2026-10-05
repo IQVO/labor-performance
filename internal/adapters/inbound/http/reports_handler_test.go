@@ -60,6 +60,7 @@ type performanceReportRow struct {
 	HourBucket        string   `json:"hourBucket"`
 	TasksRecorded     int      `json:"tasksRecorded"`
 	TasksUnscored     int      `json:"tasksUnscored"`
+	TasksMeasured     int      `json:"tasksMeasured"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
 	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 	StandardsDefined  int      `json:"standardsDefined"`
@@ -69,6 +70,7 @@ type performanceReportRow struct {
 type performanceReportBar struct {
 	TaskType          string   `json:"taskType"`
 	TasksRecorded     int      `json:"tasksRecorded"`
+	TasksMeasured     int      `json:"tasksMeasured"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
 }
 
@@ -76,6 +78,7 @@ type performanceReportBar struct {
 type performanceReportTotals struct {
 	TasksRecorded     int      `json:"tasksRecorded"`
 	TasksScored       int      `json:"tasksScored"`
+	TasksMeasured     int      `json:"tasksMeasured"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
 }
 
@@ -127,7 +130,8 @@ func TestGetPerformanceReportSuccess(t *testing.T) {
 }
 
 // assertReportPickRow pins the scored PICK row: real means, one standard
-// defined.
+// defined, and the measured subset surfaced (ADR-0007's tasksMeasured was
+// stored but never served until this wire change).
 func assertReportPickRow(t *testing.T, row performanceReportRow) {
 	t.Helper()
 	if row.TaskType != "PICK" || row.HourBucket != "2026-09-05T09:00:00Z" {
@@ -135,6 +139,9 @@ func assertReportPickRow(t *testing.T, row performanceReportRow) {
 	}
 	if row.MeanEfficiencyPct == nil || *row.MeanEfficiencyPct != 90 {
 		t.Errorf("PICK meanEfficiencyPct = %v, want 90", row.MeanEfficiencyPct)
+	}
+	if row.TasksMeasured != 3 {
+		t.Errorf("PICK tasksMeasured = %d, want 3 (the denominator of meanActualSeconds)", row.TasksMeasured)
 	}
 	if row.StandardsDefined != 1 {
 		t.Errorf("PICK standardsDefined = %d, want 1", row.StandardsDefined)
@@ -168,8 +175,14 @@ func assertReportBreakdownAndTotals(t *testing.T, body performanceReportBody) {
 	if len(body.ByTaskType) != 2 {
 		t.Errorf("got %d bars, want 2 (one per task type)", len(body.ByTaskType))
 	}
+	if body.ByTaskType[0].TaskType == "PICK" && body.ByTaskType[0].TasksMeasured != 3 {
+		t.Errorf("PICK bar tasksMeasured = %d, want 3", body.ByTaskType[0].TasksMeasured)
+	}
 	if body.Totals.TasksRecorded != 8 || body.Totals.TasksScored != 2 {
 		t.Errorf("totals = %d recorded / %d scored, want 8/2", body.Totals.TasksRecorded, body.Totals.TasksScored)
+	}
+	if body.Totals.TasksMeasured != 3 {
+		t.Errorf("totals tasksMeasured = %d, want 3", body.Totals.TasksMeasured)
 	}
 	if body.Totals.MeanEfficiencyPct == nil || *body.Totals.MeanEfficiencyPct != 90 {
 		t.Errorf("totals meanEfficiencyPct = %v, want 90 — the 5 unscorable tasks must not drag it toward 0",

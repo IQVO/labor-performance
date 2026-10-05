@@ -35,6 +35,7 @@ type reportRowDTO struct {
 	TasksRecorded     int      `json:"tasksRecorded"`
 	TasksScored       int      `json:"tasksScored"`
 	TasksUnscored     int      `json:"tasksUnscored"`
+	TasksMeasured     int      `json:"tasksMeasured"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
 	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 	StandardsDefined  int      `json:"standardsDefined"`
@@ -48,6 +49,7 @@ type taskTypeBarDTO struct {
 	TasksRecorded     int      `json:"tasksRecorded"`
 	TasksScored       int      `json:"tasksScored"`
 	TasksUnscored     int      `json:"tasksUnscored"`
+	TasksMeasured     int      `json:"tasksMeasured"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
 	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 	StandardsDefined  int      `json:"standardsDefined"`
@@ -59,6 +61,7 @@ type totalsDTO struct {
 	TasksRecorded     int      `json:"tasksRecorded"`
 	TasksScored       int      `json:"tasksScored"`
 	TasksUnscored     int      `json:"tasksUnscored"`
+	TasksMeasured     int      `json:"tasksMeasured"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
 	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 }
@@ -149,6 +152,7 @@ func toReportDTO(from, to time.Time, rep report.LaborPerformanceReport) laborPer
 			TasksRecorded:     row.TasksRecorded,
 			TasksScored:       row.TasksScored,
 			TasksUnscored:     row.TasksUnscored(),
+			TasksMeasured:     row.TasksMeasured,
 			MeanEfficiencyPct: row.MeanEfficiencyPct(),
 			MeanActualSeconds: row.MeanActualSeconds(),
 			StandardsDefined:  row.StandardsDefined,
@@ -163,6 +167,7 @@ func toReportDTO(from, to time.Time, rep report.LaborPerformanceReport) laborPer
 			TasksRecorded:     b.TasksRecorded,
 			TasksScored:       b.TasksScored,
 			TasksUnscored:     b.TasksUnscored,
+			TasksMeasured:     b.TasksMeasured,
 			MeanEfficiencyPct: b.MeanEfficiencyPct,
 			MeanActualSeconds: b.MeanActualSeconds,
 			StandardsDefined:  b.StandardsDefined,
@@ -179,6 +184,7 @@ func toReportDTO(from, to time.Time, rep report.LaborPerformanceReport) laborPer
 			TasksRecorded:     rep.Totals.TasksRecorded,
 			TasksScored:       rep.Totals.TasksScored,
 			TasksUnscored:     rep.Totals.TasksUnscored,
+			TasksMeasured:     rep.Totals.TasksMeasured,
 			MeanEfficiencyPct: rep.Totals.MeanEfficiencyPct,
 			MeanActualSeconds: rep.Totals.MeanActualSeconds,
 		},

@@ -129,7 +129,11 @@ A **Labor Performance Report**, keyed per **TaskType × UTC hour bucket**:
 | `standardsDefined` / `standardsRevised` | standard-lifecycle events in the bucket |
 
 Served with a per-TaskType breakdown (one bar per TaskType — the shape the
-WES Dashboard's chart binds to) and window totals.
+WES Dashboard's chart binds to) and window totals. `tasksMeasured` is
+served on every layer of the response (rows, per-TaskType bars, window
+totals) alongside `tasksScored` — a bucket can be measured but not scored,
+and hiding that denominator would make `meanActualSeconds` unauditable
+from the wire alone.
 
 Two design choices follow directly from this context's existing
 discipline:
@@ -156,15 +160,18 @@ the work actually happened. This is the analytical twin of ADR-0004's
 "resolve the standard active *as of* CompletedAt, not as of now".
 
 One consequence is worth stating plainly rather than discovering later: as
-documented in ADR-0003 and `shared.ParseTaskTypeLenient`,
-`fulfillment-execution`'s `TaskCompleted` payload does not yet carry a
-`task_type`, so **every** row this service records today has an empty task
-type. The report labels that bucket `UNCLASSIFIED` — an explicit,
-chartable category and a non-empty primary-key column — rather than
-dropping the rows, inventing a task type for them, or keying a fact table
-on an empty string. Until `fulfillment-execution` adds the field, the
-per-TaskType breakdown will legitimately show one bar. That is an honest
-picture of the current wire contract, not a defect in the report.
+of `fulfillment-execution`'s ADR-0023, `task_type` IS on the
+`TaskCompleted` wire (this service's own long-standing gap, tracked in
+ADR-0003/0014 and since closed — the consumer reads it at
+`consumer.go`'s `ParseTaskTypeLenient` call). Completions from publishers
+that predate that change — and the lookup-miss degrade case for task
+types this service does not model (e.g. REBIN) — still arrive with an
+empty task type; the report labels that bucket `UNCLASSIFIED`, an
+explicit, chartable category and a non-empty primary-key column, rather
+than dropping the rows, inventing a task type for them, or keying a fact
+table on an empty string. The per-TaskType breakdown therefore shows real
+bars today, with UNCLASSIFIED as the residual rather than the whole
+picture.
 
 ### 5. Served over REST
 
@@ -224,17 +231,21 @@ enforce that isolation in both directions.
 
 ### Deferred
 
-- **The `labor-mfe` remote itself.** CORS is in place on both servers; the
-  actual console screen remains a separate, later PR (as it already was in
-  the v1 scope-cut).
-- **A Postgres integration test for the analytics store.** The
-  `analyticsstore` package's in-memory implementation is fully unit-tested
-  and both implementations route aggregation through the same
-  `report.Build`, but the Postgres projection's SQL is not yet exercised by
-  a build-tagged integration test the way the OLTP repos are. Worth a
-  fast-follow.
-- **Helm chart wiring for the two new binaries**, and a `docker-compose`
-  profile for the analytics stack beyond the database itself.
-- **An MCP report tool.** This service has no MCP inbound adapter (v1
-  deferred it); a read-only tool over the reports REST is the intended
-  follow-up once one exists.
+- **The `labor-mfe` remote's console screen content.** CORS is in place on
+  both servers and the remote itself has since shipped (`web/` + the
+  chart's frontend component, disabled by default) — further screen work
+  is ordinary feature work, not an open ADR item.
+
+> **Deferred items since shipped:** the Helm chart wiring for the
+> projector and reports binaries (this chart's `analytics:` block), the
+> `labor-mfe` remote (`web/` + `frontend:` chart component), and the MCP
+> adapter with a read tool over the same use cases (ADR-0009) are all
+> merged on `develop`. The one genuinely outstanding item is below.
+
+- **~~A Postgres integration test for the analytics store.~~ Shipped:**
+  `internal/adapters/outbound/analyticsstore/postgres_integration_test.go`
+  drives the real projection and reader against a throwaway testcontainers
+  Postgres under `migrations/analytics` — the projection's idempotent
+  claim, the commutative `+=` upsert, UNCLASSIFIED normalisation, window
+  and task-type filters, and the freshness watermark are all proven
+  against real SQL, closing this ADR's original fast-follow.

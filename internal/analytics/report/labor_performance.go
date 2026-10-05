@@ -137,10 +137,18 @@ func (r Row) MeanActualSeconds() *float64 {
 // window collapsed onto a single TaskType, which is the shape the console's
 // WES Dashboard bar chart consumes.
 type TaskTypeBar struct {
-	TaskType          string
-	TasksRecorded     int
-	TasksScored       int
-	TasksUnscored     int
+	TaskType      string
+	TasksRecorded int
+	TasksScored   int
+	// TasksUnscored is TasksRecorded - TasksScored, never negative.
+	TasksUnscored int
+	// TasksMeasured is the subset with a positive ActualSeconds — the
+	// denominator of MeanActualSeconds. Wider than TasksScored (ADR
+	// 0006's measured-without-scored distinction) and surfaced on the
+	// wire so a chart can show both denominators honestly.
+	TasksMeasured int
+	// MeanEfficiencyPct / MeanActualSeconds are recomputed from the
+	// summed raw counters, nullable when the respective subset is empty.
 	MeanEfficiencyPct *float64
 	MeanActualSeconds *float64
 	// StandardsDefined and StandardsRevised carry the standard-lifecycle
@@ -159,9 +167,13 @@ type TaskTypeBar struct {
 // by volume, and they are nullable for exactly the same reason a Row's
 // are.
 type Totals struct {
-	TasksRecorded     int
-	TasksScored       int
-	TasksUnscored     int
+	TasksRecorded int
+	TasksScored   int
+	TasksUnscored int
+	TasksMeasured int
+	// MeanEfficiencyPct / MeanActualSeconds are derived once, here, from
+	// the summed raw counters; nullable for exactly the same reason a
+	// Row's are.
 	MeanEfficiencyPct *float64
 	MeanActualSeconds *float64
 }
@@ -216,6 +228,7 @@ func totalsOf(rows []Row) Totals {
 		TasksRecorded:     acc.TasksRecorded,
 		TasksScored:       acc.TasksScored,
 		TasksUnscored:     acc.TasksUnscored(),
+		TasksMeasured:     acc.TasksMeasured,
 		MeanEfficiencyPct: acc.MeanEfficiencyPct(),
 		MeanActualSeconds: acc.MeanActualSeconds(),
 	}
@@ -258,6 +271,7 @@ func breakdown(rows []Row) []TaskTypeBar {
 			TasksRecorded:     t.TasksRecorded,
 			TasksScored:       t.TasksScored,
 			TasksUnscored:     t.TasksUnscored(),
+			TasksMeasured:     t.TasksMeasured,
 			MeanEfficiencyPct: t.MeanEfficiencyPct(),
 			MeanActualSeconds: t.MeanActualSeconds(),
 			StandardsDefined:  t.StandardsDefined,

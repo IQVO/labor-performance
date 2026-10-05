@@ -70,10 +70,13 @@ paths:
         time, so a replayed or late-projected event lands in the hour the
         work actually happened.
 
-        Note that `taskType` may legitimately be `UNCLASSIFIED`:
-        fulfillment-execution's TaskCompleted payload does not yet carry a
-        task_type field, so tasks recorded today are labelled explicitly
-        rather than dropped or given an invented type.
+        Note that `taskType` may legitimately be `UNCLASSIFIED`: a
+        completion whose task_type was absent or unrecognized
+        (e.g. REBIN, which this service does not model) is labelled
+        explicitly rather than dropped or given an invented type. Since
+        fulfillment-execution's ADR-0023 put task_type on the wire, most
+        completions classify; UNCLASSIFIED remains a real, chartable
+        bucket for older payloads and lookup misses.
       parameters:
         - name: from
           in: query
@@ -197,6 +200,7 @@ components:
         - tasksRecorded
         - tasksScored
         - tasksUnscored
+        - tasksMeasured
         - standardsDefined
         - standardsRevised
       properties:
@@ -224,6 +228,14 @@ components:
           type: integer
           description: tasksRecorded minus tasksScored; never negative.
           example: 5
+        tasksMeasured:
+          type: integer
+          description: >-
+            The subset whose ActualSeconds was positive — the denominator
+            of meanActualSeconds. Wider than tasksScored: a task can be
+            measured (a real duration) without being scored (no standard
+            to compare against), per ADR 0006's distinction.
+          example: 6
         meanEfficiencyPct:
           type: number
           format: double
@@ -262,6 +274,7 @@ components:
         - tasksRecorded
         - tasksScored
         - tasksUnscored
+        - tasksMeasured
         - standardsDefined
         - standardsRevised
       properties:
@@ -277,6 +290,10 @@ components:
         tasksUnscored:
           type: integer
           example: 7
+        tasksMeasured:
+          type: integer
+          description: The measured subset across the window (denominator of meanActualSeconds).
+          example: 9
         meanEfficiencyPct:
           type: number
           format: double
@@ -301,7 +318,7 @@ components:
     Totals:
       type: object
       description: The entire queried window collapsed to a single headline.
-      required: [tasksRecorded, tasksScored, tasksUnscored]
+      required: [tasksRecorded, tasksScored, tasksUnscored, tasksMeasured]
       properties:
         tasksRecorded:
           type: integer
@@ -312,6 +329,9 @@ components:
         tasksUnscored:
           type: integer
           example: 15
+        tasksMeasured:
+          type: integer
+          example: 17
         meanEfficiencyPct:
           type: number
           format: double
