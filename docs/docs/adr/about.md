@@ -66,7 +66,7 @@ Typos, broken links and formatting are of course fair game.
 | [0006](./0006-mean-actual-seconds-independent-of-standard.md) | MeanActualSeconds on TaskTypePerformance, independent of any standard | Accepted |
 | [0007](./0007-analytical-data-product.md) | Analytical data product | Accepted; envelope superseded by 0021 |
 | [0008](./0008-standard-metrics-convention.md) | Standard metrics convention across the fleet | Accepted |
-| [0009](./0009-mcp-inbound-adapter.md) | Model Context Protocol as an inbound adapter, not a new service | Accepted |
+| [0009](./0009-mcp-inbound-adapter.md) | Model Context Protocol as an inbound adapter, not a new service | Accepted — auth/scope sections superseded by 0012 |
 | [0010](./0010-transactional-outbox.md) | Transactional outbox for the analytics topic | Accepted; envelope superseded by 0021 |
 | [0011](./0011-rest-auth-static-bearer-scopes.md) | REST identity — fleet-standard static bearer keys with read/read-write scopes | Superseded by 0012 |
 | [0012](./0012-remove-rest-auth-layer.md) | Remove the REST/MCP identity layer | Accepted |

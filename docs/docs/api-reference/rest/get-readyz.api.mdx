@@ -1,0 +1,60 @@
+---
+id: get-readyz
+title: "Readiness probe"
+description: "Distinct from liveness (GET /healthz): readiness flips to not-ready as the FIRST step of a graceful shutdown drain (503 with a problem body), so a Kubernetes readinessProbe stops routing new traffic while in-flight requests finish. Liveness never flips."
+sidebar_label: "Readiness probe"
+hide_title: true
+hide_table_of_contents: true
+api: eJzlVttu20YQ/ZXBvNRGKVFtEMRgn4LESY2khaGwfXH1sFoOxY2Xu/TOUDYjCOhH9Av7JcVQsiJXLvIB1YuEvcycOWfmrDYoZsVY3GBDxkuDiwxjR8mIi+GqwgJXJHMy1fAFM6yIbXKd7mGBbx2LC1agTrEF79YUiBnO3l+WkO/CfTkvIJGp3LhTe9cxSIQQZaLLAxgGaQjeXc0/lcBCHcQaDKySsVT3HrjppYr3AapkXICzl7MXcO+kAQNdiktPLSxjNZxnwBEMfOiXlAIJ8de01ykuCVhix5BiLy6sINA9SDJ17SzcN84TuDCpvVs1AonuemJhqF1w3Ezh42NlgdaUdlVMMcNE3MXAxFhs8MfZTL+eMlQ2BExp7SyB20EatP5EltyaHiFghjYGoSAawnSdd3YUIP/MGmeDbBtqjf6SoSMsMC4/kxXMsEsql7gdChYjPR+dY0kurDBDejBt53VpRIHb8ZPhy9mLb+IeuVfazg5yuKD8rxIxn4MJFbQ9i+p6qO2I4ul/F7gX8ftvF/oU4fzdG3h1MXsF1/sueEtinGeoY4Kfy/IaXl9fjSo9JWgX9ZSeOqbWCBbYJ4fbDMWJf+bgNjul2AWhFSXdq0YQz15zgcUE+1zMrbbSXe8SVTqI4+4jgkO+Q/DFARzua9+XjntFW5Im7idX6zfSYIF5ehxiFZaSzvwG++SxwEakK/LcR2t8E1mKi9nF7ITyj7oNFa3Jx65VLbcLrauOY017TB/NMia4pjQyGiypECexLsPKBaJEFfjxgpJTmVQxnNFDR1aoAnEtQUcJSsO35dDRrtOMld74yZonj5f00CEd26i0jo1go/a8xqp7XzvvFfaEHsj2CgTE8C1PoWwcH/q9olpt4wiRJlX2+DhPrnnI6oGfwAn8evn75RyMtdQJgxkxH7Nwn5wQRDWQ+eWnEv7+8y+QxojOFz1Y37Nbkx+gSuo2sBxGX3RhGftQwQdT3xqwMXDfUlKPfLag73jM++ZQNq0pCJwxEZjOcW54CNZ0bjqY1p9P/wiYoTbDTpUfprOp6u6dpcBjqwbTqqq/XJXaxDrExsrRxqncJZkWs6PO4iLPV06afjm1sc2tN33lIlX5qPzkiNNxFLrI0ppwlGN+eEDULejfzbT56i3/+ydp7yxCD5J33rigqo1SbPZGcIN7I1hkqLOuK5vN0jD9lvx2q8t3PaUBi5tFhmuTnFnqYN8stpn+R6gojc5xSwMW+Hrsd20i43vNfPJ4qUccHOn9ZYnb7T9j7/kj
+sidebar_class_name: "get api-method"
+info_path: docs/api-reference/rest/labor-performance-api
+custom_edit_url: null
+hide_send_button: true
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Readiness probe"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/readyz"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Distinct from liveness (GET /healthz): readiness flips to not-ready as the FIRST step of a graceful shutdown drain (503 with a problem body), so a Kubernetes readinessProbe stops routing new traffic while in-flight requests finish. Liveness never flips.
+
+<ParamsDetails>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-readyz.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-readyz.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

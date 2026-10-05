@@ -127,8 +127,10 @@ paths:
                 $ref: "#/components/schemas/ProblemDetails"
         "422":
           description: >-
-            Expected seconds must be greater than zero, or
-            travelComponentSeconds is negative or exceeds expectedSeconds
+            Expected seconds must be greater than zero, travelComponentSeconds
+            is negative or exceeds expectedSeconds, or the Idempotency-Key
+            header on this request was already used with a different request
+            body (idempotency-key-reused).
           content:
             application/problem+json:
               schema:
