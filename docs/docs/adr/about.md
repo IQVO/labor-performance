@@ -81,6 +81,13 @@ Typos, broken links and formatting are of course fair game.
 | [0021](./0021-cloudevents-mandatory-event-envelope.md) | CloudEvents 1.0 as the mandatory event envelope | Accepted |
 | [0022](./0022-optimistic-concurrency-one-open-standard.md) | Optimistic concurrency (version column) and one open standard per task type on labor_standards | Accepted |
 | [0023](./0023-housekeeping-sweeper.md) | Housekeeping sweeper for idempotency keys and published outbox rows | Accepted |
+| [0024](./0024-labor-mfe-frontend-remote.md) | labor-mfe: a chart-shipped, disabled-by-default frontend remote | Accepted |
+| [0025](./0025-rfc7807-problem-details.md) | RFC 7807 Problem Details for every REST error | Accepted |
+| [0026](./0026-arch-go-fitness-suite.md) | arch-go architecture fitness tests, enforced in CI | Accepted |
+| [0027](./0027-bootretry-and-startup-probe.md) | Boot-time dial retry (bootretry) + Kubernetes startupProbe | Accepted |
+| [0028](./0028-gateway-api-httproute.md) | Gateway API HTTPRoute, disabled by default, alongside Ingress | Accepted |
+| [0029](./0029-kafka-writer-durability.md) | Kafka writer durability: RequireAll acks + 10ms BatchTimeout | Accepted |
+| [0030](./0030-mcp-eval-and-governance-gates.md) | MCP eval suite and governance gate, run as plain go test | Accepted |
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.
