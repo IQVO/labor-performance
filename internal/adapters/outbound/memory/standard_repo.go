@@ -15,6 +15,12 @@ type StandardRepo struct {
 	mu        sync.RWMutex
 	standards map[shared.StandardId]*standard.LaborStandard
 	nextID    int
+
+	// FailNextSaveWith, when non-nil, is returned by the NEXT Save call
+	// and cleared — a test seam for scripting the Postgres adapter's
+	// optimistic-concurrency / one-open-standard failures (ADR 0022)
+	// through the same use case the HTTP adapter drives.
+	FailNextSaveWith error
 }
 
 // NewStandardRepo constructs an empty StandardRepo.
@@ -25,7 +31,16 @@ func NewStandardRepo() *StandardRepo {
 func (r *StandardRepo) Save(_ context.Context, s *standard.LaborStandard) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.standards[s.ID()] = s
+	if r.FailNextSaveWith != nil {
+		err := r.FailNextSaveWith
+		r.FailNextSaveWith = nil
+		return err
+	}
+	// Store a copy so a later in-memory mutation of the caller's aggregate
+	// (e.g. Close) cannot silently change what was already persisted —
+	// mirroring the Postgres adapter's persisted-row semantics.
+	stored := *s
+	r.standards[s.ID()] = &stored
 	return nil
 }
 
@@ -34,7 +49,8 @@ func (r *StandardRepo) FindActiveAsOf(_ context.Context, taskType shared.TaskTyp
 	defer r.mu.RUnlock()
 	for _, s := range r.standards {
 		if s.TaskType() == taskType && s.IsActiveAt(t) {
-			return s, nil
+			cp := *s
+			return &cp, nil
 		}
 	}
 	return nil, nil

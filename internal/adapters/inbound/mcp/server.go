@@ -16,7 +16,7 @@ func NewServer(deps Deps) *mcp.Server {
 	server := mcp.NewServer(
 		&mcp.Implementation{Name: "labor-performance-mcp", Version: "1.0.0"},
 		&mcp.ServerOptions{
-			Instructions: "Read-only access to labor-performance: per-associate scorecards (trend, coaching flag), per-task-type fleet performance, and active engineered labor standards. Start with the review_associate_performance prompt.",
+			Instructions: "Read-only access to labor-performance: per-associate scorecards (trend, coaching flag), per-task-type fleet performance, active engineered labor standards, and per-task-type idleness/utilization. Start with the review_associate_performance prompt.",
 		},
 	)
 

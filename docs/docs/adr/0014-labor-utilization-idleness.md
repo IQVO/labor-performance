@@ -36,10 +36,14 @@ instant is recoverable, with no upstream change, as
 this service already consumes. Phase 1 of the idleness plan is therefore
 scoped to `labor-performance` alone.
 
-`task_type` is still not on `fulfillment-execution`'s wire
-(`shared.ParseTaskTypeLenient("")` always resolves `""`), so per-task-type
-utilization buckets stay empty until that separate gap closes elsewhere.
-Associate-level utilization works today regardless.
+`task_type` was not on `fulfillment-execution`'s wire when this ADR was
+written (`shared.ParseTaskTypeLenient("")` always resolved `""`), so
+per-task-type utilization buckets started out empty. That gap is now
+**closed**: `fulfillment-execution`'s own ADR-0023 added `task_type` to
+the wire payload, and this service's consumer reads it directly (see
+ADR-0003's updated note and README.md's "Known gaps" section).
+Per-task-type utilization is populated as of that change; associate-level
+utilization was unaffected throughout.
 
 ## Decision
 
@@ -165,10 +169,10 @@ change from here.
   measured shift-length. An operator with unusually long or short shifts
   should override it; the code default is a reasonable v1 starting
   point, not a claim about any real facility's schedule.
-- Per-task-type utilization stays empty in practice until
-  `fulfillment-execution` ships `task_type` on the wire (a pre-existing,
-  separately tracked gap — not introduced or worsened by this change).
-  Associate-level utilization is unaffected and works today.
+- Per-task-type utilization is populated: `fulfillment-execution`'s own
+  ADR-0023 added `task_type` to the wire payload (a pre-existing,
+  separately tracked gap that has since closed — see ADR-0003's updated
+  note). Associate-level utilization was unaffected throughout.
 - `Open Gap` is a read-time estimate, not a stored fact — a caller
   polling `GetUtilization.ForAssociate` in a tight loop recomputes it
   every time rather than reading a cached value. Acceptable: the whole

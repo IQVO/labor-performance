@@ -53,6 +53,11 @@ type LaborStandard struct {
 	travelComponentSeconds *int64
 	effectiveFrom          time.Time
 	effectiveTo            *time.Time
+	// version is the optimistic-concurrency token (ADR 0022): 1 for a
+	// freshly constructed aggregate, advanced by exactly one on every
+	// persisted Save. Inert infrastructure metadata, exactly like id —
+	// never read by domain business logic.
+	version int
 }
 
 // New constructs a LaborStandard, freshly active (EffectiveTo nil) from
@@ -74,12 +79,18 @@ func New(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, 
 		expectedSeconds:        expectedSeconds,
 		travelComponentSeconds: travelComponentSeconds,
 		effectiveFrom:          effectiveFrom,
+		version:                1,
 	}, nil
 }
 
 // Rehydrate reconstructs a LaborStandard from persisted state without
 // re-validating construction invariants (used by repository adapters).
-func Rehydrate(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time, effectiveTo *time.Time) *LaborStandard {
+// version is the row's optimistic-concurrency token as read; 0 is treated
+// as 1 for callers predating the column (the in-memory adapter).
+func Rehydrate(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time, effectiveTo *time.Time, version int) *LaborStandard {
+	if version <= 0 {
+		version = 1
+	}
 	return &LaborStandard{
 		id:                     id,
 		taskType:               taskType,
@@ -87,6 +98,7 @@ func Rehydrate(id shared.StandardId, taskType shared.TaskType, expectedSeconds i
 		travelComponentSeconds: travelComponentSeconds,
 		effectiveFrom:          effectiveFrom,
 		effectiveTo:            effectiveTo,
+		version:                version,
 	}
 }
 
@@ -120,6 +132,11 @@ func (s *LaborStandard) ExpectedSeconds() int64    { return s.expectedSeconds }
 func (s *LaborStandard) TravelComponentSeconds() *int64 { return s.travelComponentSeconds }
 func (s *LaborStandard) EffectiveFrom() time.Time       { return s.effectiveFrom }
 func (s *LaborStandard) EffectiveTo() *time.Time        { return s.effectiveTo }
+
+// Version returns the optimistic-concurrency token (ADR 0022): the row
+// version this in-memory aggregate was loaded at (1 for a fresh New).
+// Repositories guard Save with it; domain logic never reads it.
+func (s *LaborStandard) Version() int { return s.version }
 
 // validateTravelComponentSeconds enforces the one invariant on the
 // optional travel breakdown: nil is always valid ("not declared"); a

@@ -10,8 +10,13 @@ description: "Expose this bounded context to the AI ecosystem via an MCP server 
 
 ## Status
 
-**Accepted.** The reference implementation and pilot for this pattern across
-the estate is `fulfillment-execution` (its own ADR-0008); this record is
+**Accepted — the auth/scope sections below (the Scope seam and the Static
+bearer-key auth section) are superseded by
+[ADR-0012](./0012-remove-rest-auth-layer.md), which removed the REST/MCP
+identity layer fleet-wide.** This record's remaining decisions (MCP as a
+second driving adapter, no write tool, the curated tool set) still stand.
+The reference implementation and pilot for this pattern across the estate
+is `fulfillment-execution` (its own ADR-0008); this record is
 `labor-performance` adopting that same decision, adapted to a context that is
 a pure read-side reporter to the rest of the fleet.
 
@@ -108,8 +113,12 @@ sibling context.
   type: task count, mean efficiency percent, real measured mean duration.
 - `get_labor_standard` (read) -- the currently-active engineered labor
   standard (expected seconds) for one task type.
+- `get_task_type_utilization` (read) -- idleness/utilization for one task
+  type over a trailing window, added by
+  [ADR-0014](./0014-labor-utilization-idleness.md) via the same
+  `GetUtilization` use case the REST utilization endpoint calls.
 
-All three return **compact DTOs**, not the raw domain aggregates. The single
+All four return **compact DTOs**, not the raw domain aggregates. The single
 resource exposes an associate's scorecard as a **scoped** context contract
 (`scorecard://labor/{associateId}`), backed by the same
 `GetAssociateScorecard` read model -- never a database dump. The one prompt
@@ -120,29 +129,34 @@ a signal for human follow-up, never an automated conclusion -- carrying
 ADR-0005's discipline into the MCP surface in the model-facing text itself,
 not just in the code.
 
-### No write tool -- but the scope seam is kept
+### No write tool
 
 Because neither of this context's write use cases is a decision an
-MCP-calling agent should make on its behalf, **no write tool is registered.**
-The read/read-write `Scope` plumbing in `auth.go` is nonetheless kept
-identical to the pilot: two key classes, the `scopeAllows` gate, and the
-scope-parameterised tool wrapper all exist, and every registered tool
-requires `ScopeRead`. This keeps the pattern uniform across the six contexts
-and means that if a legitimate write use case is ever designed for MCP here,
-exposing it is a single `ScopeReadWrite` registration with no auth rework.
+MCP-calling agent should make on its behalf, **no write tool is
+registered.** Every registered tool is read-only
+(`mcp.ToolAnnotations{ReadOnlyHint: true}`). *(The read/read-write `Scope`
+seam this section originally described — a `scopeAllows` gate requiring
+every tool to carry `ScopeRead` — was removed along with the rest of the
+auth layer by [ADR-0012](./0012-remove-rest-auth-layer.md); there is no
+scope plumbing left to extend if a write tool is ever added, just a new
+`mcp.AddTool` registration.)*
 
-### Static bearer-key auth, behind an OAuth-ready seam
+### Unauthenticated, like every other inbound surface
 
-`auth.go` validates a per-client API key (from a Kubernetes Secret) on every
-request; missing or invalid key returns `401` with a `WWW-Authenticate`
-challenge; the key is never logged. The middleware is an **interface**, so an
-OAuth 2.1 resource-server implementation can drop in later without touching
-any tool handler.
+[ADR-0012](./0012-remove-rest-auth-layer.md) removed the static bearer-key
+identity layer this section originally described (`auth.go`, per-client API
+keys, `401`+`WWW-Authenticate` on a missing/invalid key) from both the REST
+and MCP surfaces fleet-wide. The MCP server is unauthenticated, matching
+`cmd/labor` and `cmd/labor-reports`; any access control this fleet wants for
+labor-performance data must come from outside this service (network policy,
+a gateway, or a future, deliberate re-introduction of identity — a new
+decision, not a revert of this one).
 
 ### Reuse the existing observability
 
 The adapter is instrumented with the same OpenTelemetry setup as the HTTP
-boundary: a span per tool call (tool name, required scope, outcome). MCP
+boundary: a span per tool call, named `mcp.tool <name>` and carrying
+`mcp.tool.name` and `mcp.tool.outcome` (`ok`/`error`) attributes. MCP
 calls appear in traces next to HTTP and Kafka-consumer activity.
 
 ## Consequences
@@ -170,22 +184,23 @@ calls appear in traces next to HTTP and Kafka-consumer activity.
 ### Harder
 
 - **A second deployable to run and secure.** `cmd/mcp` is another binary and
-  image. Today it is built and run only by the `e2e-tests` black-box
-  harness (matching the other five contexts' own current state) -- it is
-  **not yet deployed to the live `warehouse` kind cluster** by
-  `warehouse-infra`'s Terraform, and **not yet wired as a client inside
-  `warehouse-ops-agent`** (T5): no existing T5 use case
+  image. The chart ships it as `templates/mcp-deployment.yaml` /
+  `mcp-service.yaml`, gated behind `mcp.enabled` (default **`false`** — the
+  same not-HPA-scalable, single-replica posture order-management's own
+  ADR-0026 uses, because the SDK's `StreamableHTTPHandler` keeps
+  per-process, in-memory MCP session state keyed by `Mcp-Session-Id`).
+  Enabling it is one Helm flag; it is **not** wired as a client inside
+  `warehouse-ops-agent` (T5): no existing T5 use case
   (`console_reports`, `dailybrief`, `flow_balance_advisory`,
   `order_lifecycle`, `stranded_reservation`) consumes this context's
-  scorecard/coaching-flag data, and the charter's own "tools map to a real
-  decision" rule means adding a client with nothing calling it would be
-  premature. Both the live-cluster deployment and a genuine T5 consuming
-  use case are deliberately deferred as a fast-follow once designed, for
-  this context and for the other five equally (none of the six MCP servers
-  in the fleet is deployed live today).
-- **Auth is deliberately minimal.** A static bearer key is appropriate for an
-  internal, non-user-facing server, but does **not** cover user-facing,
-  multi-tenant use.
+  scorecard/coaching-flag/utilization data, and the charter's own "tools map
+  to a real decision" rule means adding a client with nothing calling it
+  would be premature. A genuine T5 consuming use case is deliberately
+  deferred as a fast-follow once designed, for this context and for the
+  other five equally.
+- **Auth is gone, not minimal.** [ADR-0012](./0012-remove-rest-auth-layer.md)
+  removed the static bearer key described above; nothing authenticates a
+  caller today. Any access control must come from outside this service.
 - **The MCP spec is a moving target.** The SDK must stay pinned and
   revisited; deprecated features (`roots`/`sampling`) must be avoided.
 - **Tool curation is an ongoing discipline, not a one-time choice.** Nothing

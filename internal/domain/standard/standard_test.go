@@ -84,7 +84,7 @@ func TestIsActiveAt(t *testing.T) {
 	})
 
 	t.Run("closed standard", func(t *testing.T) {
-		s := standard.Rehydrate("std-1", shared.Pick, 45, nil, from, &to)
+		s := standard.Rehydrate("std-1", shared.Pick, 45, nil, from, &to, 1)
 		if !s.IsActiveAt(from) {
 			t.Fatal("must be active at EffectiveFrom")
 		}
@@ -102,10 +102,16 @@ func TestIsActiveAt(t *testing.T) {
 
 func TestRehydrate_RoundTrip(t *testing.T) {
 	from := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
-	s := standard.Rehydrate("std-42", shared.Slam, 60, nil, from, nil)
+	s := standard.Rehydrate("std-42", shared.Slam, 60, nil, from, nil, 3)
 
 	if s.ID() != "std-42" || s.TaskType() != shared.Slam || s.ExpectedSeconds() != 60 {
 		t.Fatalf("unexpected rehydrated standard: %+v", s)
+	}
+	if s.Version() != 3 {
+		t.Fatalf("Rehydrate must preserve the persisted version, got %d", s.Version())
+	}
+	if got := standard.Rehydrate("std-0", shared.Slam, 60, nil, from, nil, 0).Version(); got != 1 {
+		t.Fatalf("a non-positive version must normalize to 1, got %d", got)
 	}
 }
 
@@ -152,7 +158,7 @@ func TestNew_RejectsTravelComponentSecondsExceedingExpectedSeconds(t *testing.T)
 func TestRehydrate_PreservesTravelComponentSeconds(t *testing.T) {
 	from := time.Date(2026, 8, 29, 8, 0, 0, 0, time.UTC)
 	travel := int64(15)
-	s := standard.Rehydrate("std-1", shared.Pick, 45, &travel, from, nil)
+	s := standard.Rehydrate("std-1", shared.Pick, 45, &travel, from, nil, 1)
 	if s.TravelComponentSeconds() == nil || *s.TravelComponentSeconds() != 15 {
 		t.Fatalf("want rehydrated TravelComponentSeconds=15, got %v", s.TravelComponentSeconds())
 	}

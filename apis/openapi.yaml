@@ -44,6 +44,37 @@ paths:
                   status:
                     type: string
                     example: ok
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadyz
+      summary: Readiness probe
+      description: >-
+        Distinct from liveness (GET /healthz): readiness flips to
+        not-ready as the FIRST step of a graceful shutdown drain
+        (503 with a problem body), so a Kubernetes readinessProbe stops
+        routing new traffic while in-flight requests finish. Liveness
+        never flips.
+      responses:
+        "200":
+          description: The service is ready to receive traffic
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+        "503":
+          description: >-
+            The service is draining (shutdown in progress) and must not
+            receive new traffic.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
   /standards:
     post:
       tags: [standards]
@@ -53,6 +84,15 @@ paths:
         If a standard is already active for this TaskType, it is closed
         (its effective range ends now) and a new one starts — append-only
         history, never an in-place overwrite.
+
+
+        Idempotent retries: clients MUST always send a non-empty
+        `Idempotency-Key` header (any unique value per logical request)
+        when the Postgres backing is configured; a retried request with
+        the same key and body replays the original response byte-for-byte
+        instead of defining the standard a second time.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
       requestBody:
         required: true
         content:
@@ -67,15 +107,30 @@ paths:
               schema:
                 $ref: "#/components/schemas/Standard"
         "400":
-          description: Unknown task type
+          description: >
+            Unknown task type, malformed body, or a missing/empty
+            Idempotency-Key header on a route protected by the
+            idempotency middleware.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "409":
+          description: >
+            The write lost a concurrency race: another writer modified the
+            same labor standard after this request's snapshot
+            (concurrent-modification), or another standard is already open
+            for this task type (standard-conflict). Re-fetch and retry.
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
         "422":
           description: >-
-            Expected seconds must be greater than zero, or
-            travelComponentSeconds is negative or exceeds expectedSeconds
+            Expected seconds must be greater than zero, travelComponentSeconds
+            is negative or exceeds expectedSeconds, or the Idempotency-Key
+            header on this request was already used with a different request
+            body (idempotency-key-reused).
           content:
             application/problem+json:
               schema:
@@ -222,6 +277,22 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/TaskType"
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >
+        A caller-minted unique key per logical request (e.g. a UUID).
+        Clients must always send a non-empty key on POST /standards: with
+        the Postgres backing configured, a retry carrying the same key and
+        an identical body replays the original stored response instead of
+        re-executing the create; the same key with a different body is
+        rejected with 422 idempotency-key-reused. Declared required: false
+        because the in-memory configuration accepts the request without a
+        key (no transactional backing to gate on) — never rely on that in
+        a real deployment.
+      schema:
+        type: string
     WindowQueryParam:
       name: window
       in: query

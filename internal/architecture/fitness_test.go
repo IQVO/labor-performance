@@ -16,7 +16,7 @@ import (
 	"github.com/arch-go/arch-go/api/configuration"
 )
 
-// TestMCPAdapterDependencyRule encodes ADR-0008: the MCP inbound adapter is
+// TestMCPAdapterDependencyRule encodes ADR-0009: the MCP inbound adapter is
 // additive, never load-bearing for the OLTP composition root. It may depend
 // only on the application and domain layers (never on outbound adapters,
 // never on cmd), and — the direction that actually matters for keeping it

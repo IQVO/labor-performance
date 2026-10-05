@@ -139,6 +139,17 @@ func NewConsumerForTopic(brokers []string, groupID, topic string, recordTaskPerf
 			// (observed live: a backlog of legacy messages took hours to drain while
 			// the consumer processed nothing else).
 			BatchTimeout: dlqBatchTimeout,
+			// RequiredAcks + Balancer align this writer with every outbound
+			// Kafka writer in the fleet (see outbound/kafka's
+			// syncWriterRequiredAcks/Hash doc comments and ADR-0018): kafka-go's
+			// RequireNone default would report a DLQ write successful before the
+			// broker actually stored it, silently losing the one copy of a
+			// message that already failed every in-process retry. Hash keeps
+			// every dead-lettered message for a given Kafka key on the same DLQ
+			// partition, so a human replaying the topic sees one key's failures
+			// in original order rather than interleaved across partitions.
+			RequiredAcks: dlqRequiredAcks,
+			Balancer:     &kafkago.Hash{},
 		},
 	}
 }
@@ -383,3 +394,8 @@ func isTopicNotReady(err error) bool {
 
 // dlqBatchTimeout flushes a dead-letter write almost immediately.
 const dlqBatchTimeout = 10 * time.Millisecond
+
+// dlqRequiredAcks makes the DLQ write wait for the broker's
+// acknowledgement, matching every outbound Kafka writer in this fleet
+// (see internal/adapters/outbound/kafka's syncWriterRequiredAcks).
+const dlqRequiredAcks = kafkago.RequireAll
