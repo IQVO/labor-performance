@@ -172,6 +172,22 @@ config:
   logLevel: "info"        # debug | info | warn | error
   kafkaConsumerGroup: "labor-performance"
   corsAllowedOrigins: "http://localhost:5173,http://localhost:5187"
+  # EVENT_PUBLISHER (ADR-0010/0013): "log" (default) keeps the log
+  # publisher only; "kafka" fans every domain event out to
+  # warehouse.labor-performance.analytics AND .events — through the
+  # transactional outbox whenever the database is configured. Previously
+  # this env was never set by the chart, so publishing in-cluster relied
+  # on a hand-written extraEnv entry.
+  eventPublisher: "log"
+  # OUTBOX_RELAY_INTERVAL (ADR-0010): how often the in-process relay
+  # drains outbox_events onto Kafka when eventPublisher=kafka.
+  outboxRelayInterval: "1s"
+  # Housekeeping sweeper (docs/docs/adr/0023-housekeeping-sweeper.md):
+  # bounds the two append-only tables. 0 for a TTL/retention keeps those
+  # rows forever; 0 for the interval disables the sweeper.
+  housekeepingInterval: "1h"
+  idempotencyKeyTtl: "24h"
+  outboxRetention: "168h"
 
 database:
   url: ""

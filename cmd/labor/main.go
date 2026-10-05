@@ -92,6 +92,13 @@ func run() error {
 	defer closePublisher()
 	clock := memory.SystemClock{}
 
+	// Housekeeping sweeper (ADR-0023) + the outbox-lag gauge (ADR-0010's
+	// deferred follow-up), both no-ops without the Postgres backing. The
+	// returned stop func is deferred so it runs BEFORE the deferred
+	// persistence.close() closes the pool.
+	stopHousekeeping := startHousekeeping(persistence.pool, logger)
+	defer stopHousekeeping()
+
 	standardMetrics, err := telemetry.NewStandardMetrics()
 	if err != nil {
 		return err
@@ -109,37 +116,7 @@ func run() error {
 		Logger:            logger,
 	}
 
-	getUtilization := &usecases.GetUtilization{
-		Performances: performances,
-		IdlePeriods:  persistence.idlePeriods,
-		Clock:        clock,
-	}
-
-	// readiness gates GET /readyz (ADR-0017 §graceful shutdown,
-	// mirroring order-management's ADR-0025 exactly). The zero value
-	// is ready; SetNotReady is called as the FIRST step of the
-	// shutdown sequence below, before the HTTP server itself stops
-	// accepting connections, so a Kubernetes readinessProbe has a
-	// chance to observe the flip and stop routing new traffic during
-	// the drain window that follows.
-	readiness := &inboundhttp.Readiness{}
-
-	server := &inboundhttp.Server{
-		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, UnitOfWork: persistence.uow, Metrics: standardMetrics},
-		GetStandard:            &usecases.GetStandard{Standards: standards},
-		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
-		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
-		GetUtilization:         getUtilization,
-		// IdempotencyPool is nil for the in-memory dev configuration
-		// (DATABASE_URL unset) — see persistence.pool's own doc
-		// comment and RequireIdempotencyKey's nil-pool convention in
-		// server.go.
-		IdempotencyPool: persistence.pool,
-		// readiness backs GET /readyz (ADR-0017 §graceful shutdown):
-		// flipped to not-ready as the FIRST step of shutdown, below,
-		// before anything else stops.
-		Readiness: readiness,
-	}
+	readiness, server := buildHTTPServer(persistence, standards, performances, publisher, clock, standardMetrics)
 
 	httpServer := &http.Server{
 		Addr:              httpAddr,
@@ -152,6 +129,86 @@ func run() error {
 	consumer := inboundkafka.NewConsumer(kafkaBrokers, kafkaGroupID, recordTaskPerformance, logger)
 
 	return serve(ctx, httpServer, consumer, relay, kafkaBrokers, kafkaGroupID, logger, readiness)
+}
+
+// buildHTTPServer assembles the inbound HTTP adapter's dependency set:
+// every use case the router serves plus the optional Postgres-backed
+// collaborators. readiness gates GET /readyz (ADR-0017 §graceful
+// shutdown): the zero value is ready and SetNotReady is called as the
+// FIRST step of shutdown, before the HTTP server stops accepting, so a
+// Kubernetes readinessProbe has a window to observe the flip.
+func buildHTTPServer(p *persistence, standards ports.StandardRepo, performances ports.PerformanceRepo, publisher ports.EventPublisher, clock ports.Clock, standardMetrics *telemetry.StandardMetrics) (*inboundhttp.Readiness, *inboundhttp.Server) {
+	readiness := &inboundhttp.Readiness{}
+	return readiness, &inboundhttp.Server{
+		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, UnitOfWork: p.uow, Metrics: standardMetrics},
+		GetStandard:            &usecases.GetStandard{Standards: standards},
+		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
+		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: performances},
+		GetUtilization: &usecases.GetUtilization{
+			Performances: performances,
+			IdlePeriods:  p.idlePeriods,
+			Clock:        clock,
+		},
+		// IdempotencyPool is nil for the in-memory dev configuration
+		// (DATABASE_URL unset) — see persistence.pool's own doc
+		// comment and RequireIdempotencyKey's nil-pool convention in
+		// server.go.
+		IdempotencyPool: p.pool,
+		Readiness:       readiness,
+	}
+}
+
+// startHousekeeping wires the two background jobs that need the Postgres
+// backing and returns the function that stops them cleanly (called via
+// defer from run, so by LIFO order it runs BEFORE the deferred
+// persistence.close() closes the pool):
+//
+//   - the housekeeping sweeper (ADR-0023): bounds idempotency_keys
+//     (IDEMPOTENCY_KEY_TTL, default 24h) and PUBLISHED outbox_events
+//     (OUTBOX_RETENTION, default 7d), sweeping every HOUSEKEEPING_INTERVAL
+//     (default 1h; 0 disables). Idempotency keys are written regardless of
+//     EVENT_PUBLISHER, so the sweeper is not gated on it.
+//   - labor_performance.outbox.lag_seconds (ADR-0010's deferred outbox-lag
+//     metric): an async gauge sampling the age of the oldest unpublished
+//     outbox row.
+//
+// With a nil pool (in-memory dev configuration) it is a no-op.
+func startHousekeeping(pool *pgxpool.Pool, logger *slog.Logger) func() {
+	if pool == nil {
+		return func() {}
+	}
+
+	if reg, err := postgres.RegisterOutboxLagGauge(pool); err != nil {
+		logger.Warn("outbox lag gauge unavailable", "error", err)
+	} else {
+		// Unregister now rather than in the returned stop func: the gauge
+		// must stop sampling before the pool closes, and the sweeper's
+		// own bounded stop below is the only thing that needs to WAIT.
+		defer func() { _ = reg.Unregister() }()
+	}
+
+	done := make(chan struct{})
+	ctx, stop := context.WithCancel(context.Background())
+	sweeper := postgres.NewSweeper(pool,
+		postgres.WithSweepInterval(durationEnv("HOUSEKEEPING_INTERVAL", postgres.DefaultSweepInterval)),
+		postgres.WithIdempotencyKeyTTL(durationEnv("IDEMPOTENCY_KEY_TTL", postgres.DefaultIdempotencyKeyTTL)),
+		postgres.WithOutboxRetention(durationEnv("OUTBOX_RETENTION", postgres.DefaultOutboxRetention)),
+		postgres.WithSweeperLogger(logger),
+	)
+	go func() {
+		defer close(done)
+		if err := sweeper.Run(ctx); err != nil {
+			logger.Error("housekeeping sweeper exited", "error", err)
+		}
+	}()
+	return func() {
+		stop()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			logger.Warn("housekeeping sweeper did not stop before the shutdown deadline")
+		}
+	}
 }
 
 // setupTelemetry configures OTel once at boot and reports the resolved

@@ -13,8 +13,9 @@ import (
 // RelaySink is where the transactional outbox relay (ADR 0010) forwards
 // already-encoded messages. It wraps a topic-less kafka-go Writer and
 // sets each message's Topic from Encoded.Topic, so one sink can serve
-// every topic the outbox carries — today only the analytics topic, but
-// the sink does not need to know that.
+// every topic the outbox carries — both the analytics topic (ADR 0007)
+// and the integration topic (ADR 0013) — without the sink needing to
+// know the list.
 type RelaySink struct {
 	Writer Writer
 }
