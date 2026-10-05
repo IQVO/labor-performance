@@ -57,6 +57,7 @@ const sidebars: SidebarsConfig = {
         'adr/0019-horizontal-autoscaling-and-pgxpool-tuning',
         'adr/0020-migrations-direct-postgres-connection',
         'adr/0021-cloudevents-mandatory-event-envelope',
+        'adr/0022-optimistic-concurrency-one-open-standard',
       ],
     },
   ],

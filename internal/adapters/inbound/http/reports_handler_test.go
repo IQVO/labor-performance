@@ -39,7 +39,7 @@ func (s *stubReportStore) FreshnessLag(context.Context) (time.Duration, error) {
 func reportsRequest(t *testing.T, store report.ReportStore, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	NewReportsRouter(&ReportsHandlers{Store: store}, nil).
+	NewReportsRouter(&ReportsHandlers{Store: store}, nil, "").
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
 	return rec
 }
@@ -345,7 +345,7 @@ func TestReportsHealthz(t *testing.T) {
 func TestReportsRouterAllowsConsoleOriginsButNotWrites(t *testing.T) {
 	t.Setenv("CORS_ALLOWED_ORIGINS", "http://localhost:5187")
 
-	router := NewReportsRouter(&ReportsHandlers{Store: &stubReportStore{}}, nil)
+	router := NewReportsRouter(&ReportsHandlers{Store: &stubReportStore{}}, nil, "")
 
 	req := httptest.NewRequest(http.MethodOptions, "/reports/performance", nil)
 	req.Header.Set("Origin", "http://localhost:5187")

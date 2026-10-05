@@ -15,12 +15,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/riandyrn/otelchi"
+	otelchimetric "github.com/riandyrn/otelchi/metric"
 
 	inboundmcp "github.com/claudioed/labor-performance/internal/adapters/inbound/mcp"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/bootretry"
@@ -94,13 +99,13 @@ func run() error {
 		GetUtilization:         &usecases.GetUtilization{Performances: adapters.performances, IdlePeriods: adapters.idlePeriods, Clock: memory.SystemClock{}},
 	}
 	server := inboundmcp.NewServer(deps)
-	handler := inboundmcp.Handler(server)
+	handler := newRouter(inboundmcp.Handler(server), serviceName)
 
 	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 
 	go func() {
 		logger.Info("mcp server listening (Streamable HTTP)", "addr", httpAddr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Error("mcp server failed", "error", err)
 		}
 	}()
@@ -112,6 +117,34 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// newRouter wraps the MCP handler in a small chi router so the binary
+// carries the same HTTP RED instrumentation as every other surface of
+// this service (ADR-0008 Tier 1 item 2): otelchi.Middleware starts the
+// request span (named after the route pattern via WithChiRoutes, so the
+// MCP endpoint is one route name rather than one per session id) and
+// otelchimetric records http.server.request.duration, in that order.
+//
+// GET /healthz answers 200 {"status":"ok"}: MCP is unauthenticated by
+// decision (ADR-0012), so probes need no credentials, and the chart's
+// tcpSocket probes keep working unchanged. The MCP Streamable HTTP
+// endpoint stays mounted at "/" exactly as before.
+func newRouter(mcpHandler http.Handler, serviceName string) http.Handler {
+	r := chi.NewRouter()
+	r.Use(otelchi.Middleware(
+		serviceName,
+		otelchi.WithChiRoutes(r),
+		otelchi.WithRequestMethodInSpanName(true),
+	))
+	r.Use(otelchimetric.NewServerRequestDuration(otelchimetric.NewBaseConfig(serviceName)))
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	r.Handle("/", mcpHandler)
+	return r
 }
 
 // adapterSet is the read-side outbound repos the MCP server needs, chosen

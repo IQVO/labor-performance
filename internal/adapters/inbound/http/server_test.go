@@ -16,6 +16,7 @@ import (
 	inboundhttp "github.com/claudioed/labor-performance/internal/adapters/inbound/http"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
+	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
 )
 
@@ -186,6 +187,29 @@ func TestPostStandards(t *testing.T) {
 		rec := e.do(t, http.MethodPost, "/standards", `{"taskType":`)
 		p := assertProblem(t, rec, http.StatusBadRequest)
 		if !strings.HasSuffix(p.Type, "malformed-request-body") {
+			t.Fatalf("problem.type = %q", p.Type)
+		}
+	})
+
+	// ADR 0022: a version-guard failure or a one-open-standard conflict
+	// surfaces as 409 with its own RFC 7807 category, so a caller can tell
+	// "re-fetch and retry" apart from a rejection on the merits.
+	t.Run("error: concurrent modification maps to 409", func(t *testing.T) {
+		e := newTestEnv(t, now)
+		e.standards.FailNextSaveWith = ports.ErrConcurrentModification
+		rec := e.do(t, http.MethodPost, "/standards", `{"taskType":"PICK","expectedSeconds":45}`)
+		p := assertProblem(t, rec, http.StatusConflict)
+		if !strings.HasSuffix(p.Type, "concurrent-modification") {
+			t.Fatalf("problem.type = %q", p.Type)
+		}
+	})
+
+	t.Run("error: one-open-standard conflict maps to 409", func(t *testing.T) {
+		e := newTestEnv(t, now)
+		e.standards.FailNextSaveWith = ports.ErrOpenStandardConflict
+		rec := e.do(t, http.MethodPost, "/standards", `{"taskType":"PICK","expectedSeconds":45}`)
+		p := assertProblem(t, rec, http.StatusConflict)
+		if !strings.HasSuffix(p.Type, "standard-conflict") {
 			t.Fatalf("problem.type = %q", p.Type)
 		}
 	})

@@ -79,6 +79,7 @@ Typos, broken links and formatting are of course fair game.
 | [0019](./0019-horizontal-autoscaling-and-pgxpool-tuning.md) | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted |
 | [0020](./0020-migrations-direct-postgres-connection.md) | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted |
 | [0021](./0021-cloudevents-mandatory-event-envelope.md) | CloudEvents 1.0 as the mandatory event envelope | Accepted |
+| [0022](./0022-optimistic-concurrency-one-open-standard.md) | Optimistic concurrency (version column) and one open standard per task type on labor_standards | Accepted |
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.
