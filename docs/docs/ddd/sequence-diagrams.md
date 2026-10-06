@@ -69,6 +69,14 @@ sequenceDiagram
         end
     end
     UC->>SR: Save next
+    alt another open standard for the task type
+        Note over SR,DB: INSERT runs in a SAVEPOINT, so the 23505 does not abort the middleware tx
+        SR-->>UC: ErrOpenStandardConflict
+        UC-->>H: error
+        H-->>MW: 409 standard-conflict
+        MW->>DB: UPDATE idempotency_keys with the 409, COMMIT
+        MW-->>Client: 409 standard-conflict
+    end
     UC->>OB: Publish LaborStandardRevised or LaborStandardDefined
     OB->>DB: INSERT outbox_events for analytics topic
     UC-->>H: new standard, metrics accepted
@@ -84,9 +92,12 @@ Source: `internal/adapters/inbound/http/idempotency.go`,
 `internal/adapters/outbound/postgres/standard_repo.go`,
 `internal/adapters/outbound/postgres/unit_of_work.go`,
 `internal/adapters/outbound/postgres/outbox_publisher.go`. Omitted: the
-log publisher that runs alongside the outbox in the fan-out, body
-decoding errors, and the `ErrOpenStandardConflict` branch (partial unique
-index violation on `Save next`, the database backstop of ADR 0022).
+log publisher that runs alongside the outbox in the fan-out and body
+decoding errors. The `ErrOpenStandardConflict` branch (partial unique
+index violation on `Save next`, the database backstop of ADR 0022) is
+shown; `postgres.execGuarded` wraps `Save`'s statement in a savepoint when
+a transaction is in the context, which keeps that branch a recorded 409
+instead of an aborted transaction and a 500.
 
 ## 2. RecordTaskPerformance — Kafka `TaskCompleted`
 

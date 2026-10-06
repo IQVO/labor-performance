@@ -45,7 +45,7 @@ func NewStandardRepo(pool *pgxpool.Pool) *StandardRepo {
 // still-open record is a no-op that must not disturb the frozen columns
 // either.
 func (r *StandardRepo) Save(ctx context.Context, s *standard.LaborStandard) error {
-	tag, err := querierFrom(ctx, r.pool).Exec(ctx, `
+	tag, err := execGuarded(ctx, r.pool, `
 		INSERT INTO labor_standards (id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version)
 		VALUES ($1, $2, $3, $4, $5, $6, 1)
 		ON CONFLICT (id) DO UPDATE
@@ -67,6 +67,33 @@ func (r *StandardRepo) Save(ctx context.Context, s *standard.LaborStandard) erro
 		return ports.ErrConcurrentModification
 	}
 	return nil
+}
+
+// execGuarded runs one write statement. When ctx carries a transaction
+// (the idempotency middleware's, or a UnitOfWork's) the statement runs
+// inside a SAVEPOINT: a failure — notably the 23505 on the one-open-standard
+// index — rolls back to the savepoint only, leaving the surrounding
+// transaction usable. Without it Postgres aborts the whole transaction
+// (SQLSTATE 25P02), so the caller's later statements (the middleware's
+// UPDATE idempotency_keys recording the 409) fail and the request becomes
+// a 500. Outside a transaction the statement runs on the pool as before.
+func execGuarded(ctx context.Context, pool *pgxpool.Pool, sql string, args ...any) (pgconn.CommandTag, error) {
+	tx, ok := txFrom(ctx)
+	if !ok {
+		return pool.Exec(ctx, sql, args...)
+	}
+	sp, err := tx.Begin(ctx) // pgx nests a transaction as a savepoint
+	if err != nil {
+		return pgconn.CommandTag{}, err
+	}
+	tag, err := sp.Exec(ctx, sql, args...)
+	if err != nil {
+		if rbErr := sp.Rollback(ctx); rbErr != nil {
+			err = errors.Join(err, rbErr)
+		}
+		return pgconn.CommandTag{}, err
+	}
+	return tag, sp.Commit(ctx)
 }
 
 func (r *StandardRepo) FindActiveAsOf(ctx context.Context, taskType shared.TaskType, t time.Time) (*standard.LaborStandard, error) {
