@@ -13,7 +13,7 @@ info:
     name: MIT
   contact:
     name: Labor Performance Team
-    url: https://github.com/claudioed/labor-performance
+    url: https://github.com/IQVO/labor-performance
 servers:
   - url: http://localhost:8080
     description: Local development
@@ -224,11 +224,13 @@ paths:
       operationId: getTaskTypeUtilization
       summary: Get fleet-wide idle-gap / utilization for a TaskType over a trailing window
       description: >
-        Measured task time vs. measured idle time (between-task waits)
-        for one TaskType, plus the still-running open-gap contribution
-        for anyone currently idle (computed at read time, never
-        persisted). Always returns 200, including a zero-count result
-        for a TaskType this service has never observed.
+        Measured task time vs. measured idle time (between-task waits
+        that already ended) for one TaskType. The still-running open gap
+        of someone idle right now is NOT included at this scope:
+        openGapSeconds is always 0 here, and the open gap is computed
+        per associate only (see /associates/{associateId}/utilization).
+        Always returns 200, including a zero-count result for a TaskType
+        this service has never observed.
       parameters:
         - $ref: "#/components/parameters/TaskTypePathParam"
         - $ref: "#/components/parameters/WindowQueryParam"
@@ -475,7 +477,9 @@ components:
             now minus their last known activity, clamped to the window.
             Computed at READ time, never persisted (see the idleness
             ADR's "Trailing idleness" limitation). Zero when the subject
-            is not currently idle.
+            is not currently idle, and always zero on the task-type
+            endpoint: an open gap belongs to one associate, so it is only
+            reported by the per-associate endpoint.
         utilizationPct:
           type: number
           format: double

@@ -483,24 +483,19 @@ auto-tagged GitHub release + published Helm chart). Plus
 
 ## Known gaps
 
-Found while refreshing these docs against the code on `develop`
-(reported, not fixed here — they are code changes):
+Found while refreshing these docs against the code on `develop`; there
+are currently none open.
 
-- **The `labor_mfe` remote does not send `Idempotency-Key`.**
-  `web/src/api.ts`'s `apiPost` posts `/standards` with only
-  `Content-Type`. When `cmd/labor` runs with `DATABASE_URL` set, the route
-  is wrapped by `RequireIdempotencyKey` (ADR 0016) and answers
-  `400 idempotency-key-required`, so the remote's define-standard form only
-  works against the in-memory configuration.
-- **The analytics consumer's dedupe gate commits before the projection.**
-  `AnalyticsConsumer.HandleMessage` marks the CloudEvents `id` in
-  `analytics_consumed_events` in its own statement, then applies the
-  projection in a separate transaction. `ReadMessage` has already committed
-  the offset, so if the apply fails the error is logged and that event's
-  effect is never retried (ADR 0007 accepts the two idempotency layers but
-  does not discuss this ordering).
+Closed entries:
 
-The previous entry here — `fulfillment-execution`'s
+- The `labor_mfe` remote did not send `Idempotency-Key` on `POST
+  /standards`; `web/src/api.ts` now sends a fresh UUID per submission.
+- The analytics consumer's dedupe gate committed before the projection and
+  `ReadMessage` auto-committed the offset, so a failed apply was never
+  retried; the claim and the apply now share one `analyticsstore.UnitOfWork`
+  transaction and the offset is committed (`FetchMessage` +
+  `CommitMessages`) only after it succeeds (ADR 0031).
+- `fulfillment-execution`'s
 `TaskCompleted` payload not carrying a `task_type` field, leaving every
 consumed event bucketed as `""` (unclassified) — was closed by
 fulfillment-execution ADR-0023 (`task_type` added to the wire payload)
