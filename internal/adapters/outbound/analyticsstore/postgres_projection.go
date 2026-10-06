@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/claudioed/labor-performance/internal/analytics/report"
+	"github.com/claudioed/labor-performance/internal/pgtx"
 )
 
 // PostgresProjection is the WRITER implementation of
@@ -62,7 +63,15 @@ func claim(ctx context.Context, tx pgx.Tx, eventId string, occurredAt time.Time)
 // (task_type, hour_bucket) row. bucketAt is the event's BUSINESS time (it
 // chooses the bucket); occurredAt is its emission time (it feeds the
 // freshness watermark).
+//
+// When ctx already carries a UnitOfWork transaction (the analytics
+// consumer's atomic claim+apply) apply JOINS it and leaves commit/rollback
+// to the owner; otherwise it opens and commits its own transaction.
 func (p *PostgresProjection) apply(ctx context.Context, eventId, taskType string, bucketAt, occurredAt time.Time, d delta) error {
+	if tx, ok := pgtx.TxFrom(ctx); ok {
+		return applyOn(ctx, tx, eventId, taskType, bucketAt, occurredAt, d)
+	}
+
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -74,13 +83,22 @@ func (p *PostgresProjection) apply(ctx context.Context, eventId, taskType string
 		}
 	}()
 
+	if err := applyOn(ctx, tx, eventId, taskType, bucketAt, occurredAt, d); err != nil {
+		return err
+	}
+
+	committed = true
+	return tx.Commit(ctx)
+}
+
+// applyOn claims eventId and, if new, upserts d into the rollup, all on tx.
+func applyOn(ctx context.Context, tx pgx.Tx, eventId, taskType string, bucketAt, occurredAt time.Time, d delta) error {
 	isNew, err := claim(ctx, tx, eventId, occurredAt)
 	if err != nil {
 		return fmt.Errorf("analyticsstore: claim event: %w", err)
 	}
 	if !isNew {
-		committed = true
-		return tx.Commit(ctx)
+		return nil
 	}
 
 	if _, err := tx.Exec(ctx,
@@ -106,8 +124,7 @@ func (p *PostgresProjection) apply(ctx context.Context, eventId, taskType string
 		return fmt.Errorf("analyticsstore: upsert rollup: %w", err)
 	}
 
-	committed = true
-	return tx.Commit(ctx)
+	return nil
 }
 
 // ApplyTaskPerformanceRecorded folds one completed task into its

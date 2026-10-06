@@ -275,6 +275,7 @@ sequenceDiagram
     autonumber
     participant T as Kafka warehouse.labor-performance.analytics
     participant AC as inbound/kafka AnalyticsConsumer
+    participant UW as analyticsstore.UnitOfWork
     participant CE as ConsumedEventsRepo
     participant PJ as analyticsstore.PostgresProjection
     participant ADB as Analytics Postgres
@@ -282,19 +283,27 @@ sequenceDiagram
     participant RH as http ReportsHandlers
     participant RS as analyticsstore.PostgresReport
 
-    T->>AC: ReadMessage group labor-performance-analytics
+    T->>AC: FetchMessage group labor-performance-analytics
     AC->>AC: cloudevents.Decode
-    alt invalid or not a projected type
-        AC->>AC: log and skip
+    alt invalid, not a projected type or undecodable data
+        AC->>AC: log and skip, commit offset
     end
-    AC->>CE: MarkProcessed id
+    AC->>UW: Execute claim and apply
+    UW->>ADB: BEGIN
+    UW->>CE: MarkProcessed id, same tx
     alt already consumed
-        CE-->>AC: false - skip
+        CE-->>UW: false - nothing to apply
     end
-    AC->>PJ: Apply TaskPerformanceRecorded, LaborStandardDefined or Revised
-    PJ->>ADB: BEGIN, INSERT analytics_processed_events ON CONFLICT DO NOTHING
+    UW->>PJ: Apply TaskPerformanceRecorded, LaborStandardDefined or Revised
+    PJ->>ADB: INSERT analytics_processed_events ON CONFLICT DO NOTHING
     PJ->>ADB: UPSERT labor_performance_rollup task_type, hour_bucket, counters
-    PJ->>ADB: COMMIT
+    alt every step succeeded
+        UW->>ADB: COMMIT
+        AC->>T: CommitMessages offset
+    else a step failed
+        UW->>ADB: ROLLBACK, claim undone
+        AC->>AC: backoff 200 ms to 5 s, retry same message, offset not committed
+    end
     Client->>RH: GET /reports/performance?from and to
     RH->>RS: Query
     RS->>ADB: SELECT rollup rows in window, read-only pool
@@ -303,6 +312,7 @@ sequenceDiagram
 ```
 
 Source: `internal/adapters/inbound/kafka/analytics_consumer.go`,
+`internal/adapters/outbound/analyticsstore/unit_of_work.go`,
 `internal/adapters/outbound/analyticsstore/consumed_events_repo.go`,
 `internal/adapters/outbound/analyticsstore/postgres_projection.go`,
 `internal/adapters/outbound/analyticsstore/postgres_report.go`,

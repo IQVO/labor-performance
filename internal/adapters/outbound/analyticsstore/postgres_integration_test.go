@@ -4,6 +4,7 @@ package analyticsstore_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -208,5 +209,67 @@ func TestConsumedEventsRepo_MarkProcessed(t *testing.T) {
 	second, err := repo.MarkProcessed(ctx, "gate-evt-1")
 	if err != nil || second {
 		t.Fatalf("duplicate MarkProcessed = %v, %v; want false, nil", second, err)
+	}
+}
+
+// TestUnitOfWork_ClaimAndProjectionCommitOrRollBackTogether proves the
+// consumer's claim (analytics_consumed_events), the projection's own claim
+// (analytics_processed_events) and the rollup upsert are ONE transaction
+// when run through the UnitOfWork: a failure after all three writes
+// leaves none of them behind, and a success persists all three.
+func TestUnitOfWork_ClaimAndProjectionCommitOrRollBackTogether(t *testing.T) {
+	pool := analyticsDB(t)
+	ctx := context.Background()
+	uow := analyticsstore.NewUnitOfWork(pool)
+	gate := analyticsstore.NewConsumedEventsRepo(pool)
+	projection := analyticsstore.NewPostgresProjection(pool)
+	fact := report.TaskPerformanceFact{TaskType: "PICK", ActualSeconds: 50, CompletedAt: hour(9), OccurredAt: hour(9)}
+
+	count := func(query string) int64 {
+		t.Helper()
+		var n int64
+		if err := pool.QueryRow(ctx, query).Scan(&n); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+		return n
+	}
+
+	boom := errors.New("boom after all writes")
+	err := uow.Execute(ctx, func(ctx context.Context) error {
+		if isNew, err := gate.MarkProcessed(ctx, "uow-evt-1"); err != nil || !isNew {
+			t.Fatalf("in-tx MarkProcessed = %v, %v; want true, nil", isNew, err)
+		}
+		if err := projection.ApplyTaskPerformanceRecorded(ctx, "uow-evt-1", fact); err != nil {
+			t.Fatalf("in-tx apply: %v", err)
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("Execute = %v, want the callback's error", err)
+	}
+	for _, q := range []string{
+		"SELECT count(*) FROM analytics_consumed_events",
+		"SELECT count(*) FROM analytics_processed_events",
+		"SELECT count(*) FROM labor_performance_rollup",
+	} {
+		if n := count(q); n != 0 {
+			t.Fatalf("%s = %d after rollback, want 0 — the writes were not one transaction", q, n)
+		}
+	}
+
+	// The same event now applies cleanly (it was never claimed) and commits.
+	if err := uow.Execute(ctx, func(ctx context.Context) error {
+		if isNew, err := gate.MarkProcessed(ctx, "uow-evt-1"); err != nil || !isNew {
+			t.Fatalf("retry MarkProcessed = %v, %v; want true, nil", isNew, err)
+		}
+		return projection.ApplyTaskPerformanceRecorded(ctx, "uow-evt-1", fact)
+	}); err != nil {
+		t.Fatalf("Execute (success): %v", err)
+	}
+	if n := count("SELECT COALESCE(SUM(tasks_recorded),0) FROM labor_performance_rollup"); n != 1 {
+		t.Fatalf("tasks_recorded = %d after the committed retry, want 1", n)
+	}
+	if n := count("SELECT count(*) FROM analytics_consumed_events"); n != 1 {
+		t.Fatalf("analytics_consumed_events = %d, want 1", n)
 	}
 }

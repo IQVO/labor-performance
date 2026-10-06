@@ -173,7 +173,6 @@ flowchart LR
     A1["Supervisor or ops agent"]:::actor
     RM2["Labor Performance Report"]:::readmodel
     RM3["Report freshness"]:::readmodel
-    H1["Hotspot: a failed fold is logged and skipped, not retried"]:::hotspot
 
     E1 --> P1
     E2 --> P1
@@ -182,7 +181,6 @@ flowchart LR
     RM1 --> RM3
     A1 --> RM2
     A1 --> RM3
-    H1 -.- P1
 
     classDef actor fill:#fff59d,stroke:#b59f00,color:#000,font-size:11px;
     classDef command fill:#4aa3df,stroke:#1f6f9f,color:#000;
@@ -204,9 +202,8 @@ projection (ADR 0007).
 | Sticky | Kind | Code evidence |
 |---|---|---|
 | TaskPerformanceRecorded, LaborStandardDefined/Revised | Domain Event | `isProjecting` in `analytics_consumer.go` |
-| Fold once per event | Policy | `analytics_consumed_events` gate + `claim` into `analytics_processed_events` in `postgres_projection.go` |
+| Fold once per event | Policy | `analytics_consumed_events` gate (`ConsumedEventsRepo`) + `claim` into `analytics_processed_events`, applied in ONE `analyticsstore.UnitOfWork` transaction; offset committed only after it succeeds (`FetchMessage` + `CommitMessages`), a failed fold is retried with capped backoff |
 | labor_performance_rollup | Read Model | `migrations/analytics/0001_report.up.sql` |
 | Supervisor or ops agent | Actor | console `laborPerformance.config.tsx`; agent `restclient/reports_clients.go` |
 | Labor Performance Report | Read Model | `report.Build`, `GET /reports/performance` |
 | Report freshness | Read Model | `ReportStore.FreshnessLag`, `GET /reports/performance/freshness` |
-| Failed fold is skipped | Hotspot | `AnalyticsConsumer.Run` logs a `Handle` error and keeps reading (`ReadMessage` auto-commits) |
