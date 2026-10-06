@@ -1,3 +1,12 @@
+---
+paths:
+  - "internal/**"
+  - "cmd/**"
+  - "apis/**"
+  - "features/**"
+  - "migrations/**"
+---
+
 # Domain model: ubiquitous language, aggregates, invariants, use cases
 
 ## Why this context exists
@@ -138,6 +147,7 @@ transactional outbox when `DATABASE_URL` is set (ADR 0010).
 | `GET` | `/task-types/{taskType}/utilization` | GetUtilization.ForTaskType |
 | `GET` | `/associates/{associateId}/utilization` | GetUtilization.ForAssociate |
 | `GET` | `/healthz` | Liveness probe |
+| `GET` | `/readyz` | Readiness probe (503 once graceful shutdown starts, ADR 0017) |
 
 There is deliberately **no** REST endpoint for `RecordTaskPerformance` — it
 is exclusively Kafka-consumer-driven. Every error is RFC 7807
@@ -176,7 +186,7 @@ service's JSON unmarshaling degrades them to `""`/`0` (the same "no
 occupant"/"unmeasurable"/"unclassified" business facts already modeled,
 not an error).
 
-`task_type` is on the wire since `fulfillment-execution` ADR-0023 and goes
+`task_type` is on the wire since `fulfillment-execution`'s task-type enrichment and goes
 through `shared.ParseTaskTypeLenient`. An unrecognized value (e.g. `REBIN`)
 or an absent field resolves to `""` (unclassified) — still recorded and
 counted, but never resolves a `LaborStandard` and never appears under

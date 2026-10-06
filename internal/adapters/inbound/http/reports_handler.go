@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/riandyrn/otelchi"
+	otelchimetric "github.com/riandyrn/otelchi/metric"
 
 	"github.com/claudioed/labor-performance/internal/analytics/report"
 )
@@ -33,6 +35,7 @@ type reportRowDTO struct {
 	TasksRecorded     int      `json:"tasksRecorded"`
 	TasksScored       int      `json:"tasksScored"`
 	TasksUnscored     int      `json:"tasksUnscored"`
+	TasksMeasured     int      `json:"tasksMeasured"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
 	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 	StandardsDefined  int      `json:"standardsDefined"`
@@ -46,6 +49,7 @@ type taskTypeBarDTO struct {
 	TasksRecorded     int      `json:"tasksRecorded"`
 	TasksScored       int      `json:"tasksScored"`
 	TasksUnscored     int      `json:"tasksUnscored"`
+	TasksMeasured     int      `json:"tasksMeasured"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
 	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 	StandardsDefined  int      `json:"standardsDefined"`
@@ -57,6 +61,7 @@ type totalsDTO struct {
 	TasksRecorded     int      `json:"tasksRecorded"`
 	TasksScored       int      `json:"tasksScored"`
 	TasksUnscored     int      `json:"tasksUnscored"`
+	TasksMeasured     int      `json:"tasksMeasured"`
 	MeanEfficiencyPct *float64 `json:"meanEfficiencyPct"`
 	MeanActualSeconds *float64 `json:"meanActualSeconds"`
 }
@@ -147,6 +152,7 @@ func toReportDTO(from, to time.Time, rep report.LaborPerformanceReport) laborPer
 			TasksRecorded:     row.TasksRecorded,
 			TasksScored:       row.TasksScored,
 			TasksUnscored:     row.TasksUnscored(),
+			TasksMeasured:     row.TasksMeasured,
 			MeanEfficiencyPct: row.MeanEfficiencyPct(),
 			MeanActualSeconds: row.MeanActualSeconds(),
 			StandardsDefined:  row.StandardsDefined,
@@ -161,6 +167,7 @@ func toReportDTO(from, to time.Time, rep report.LaborPerformanceReport) laborPer
 			TasksRecorded:     b.TasksRecorded,
 			TasksScored:       b.TasksScored,
 			TasksUnscored:     b.TasksUnscored,
+			TasksMeasured:     b.TasksMeasured,
 			MeanEfficiencyPct: b.MeanEfficiencyPct,
 			MeanActualSeconds: b.MeanActualSeconds,
 			StandardsDefined:  b.StandardsDefined,
@@ -177,6 +184,7 @@ func toReportDTO(from, to time.Time, rep report.LaborPerformanceReport) laborPer
 			TasksRecorded:     rep.Totals.TasksRecorded,
 			TasksScored:       rep.Totals.TasksScored,
 			TasksUnscored:     rep.Totals.TasksUnscored,
+			TasksMeasured:     rep.Totals.TasksMeasured,
 			MeanEfficiencyPct: rep.Totals.MeanEfficiencyPct,
 			MeanActualSeconds: rep.Totals.MeanActualSeconds,
 		},
@@ -215,20 +223,33 @@ func writeReportInternal(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // NewReportsRouter builds the chi router for the labor-reports reader
-// service. A nil logger defaults to slog.Default().
+// service. A nil logger defaults to slog.Default(); an empty serviceName
+// defaults to DefaultReportsServiceName.
+//
+// Middleware order mirrors the OLTP router's (ADR-0008 Tier 1 item 2):
+// otelchi + the request-duration histogram run ahead of the request
+// logger so a log line already carries the request's span context, and
+// WithChiRoutes labels metrics by route pattern rather than raw path.
 //
 // CORS is applied here too, from the same CORS_ALLOWED_ORIGINS convention
 // the OLTP router uses: the reports API is the console-facing surface the
 // WES Dashboard's labor panel actually calls from the browser, so it
 // needs CORS at least as much as the OLTP API does. Only GET is allowed —
 // this server has no write surface at all.
-func NewReportsRouter(h *ReportsHandlers, logger *slog.Logger) http.Handler {
+func NewReportsRouter(h *ReportsHandlers, logger *slog.Logger, serviceName string) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if serviceName == "" {
+		serviceName = DefaultReportsServiceName
 	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
+	r.Use(otelchi.Middleware(serviceName, otelchi.WithChiRoutes(r)))
+	// Emits http.server.request.duration (seconds) per OTel HTTP semantic
+	// conventions — the same RED instrumentation the OLTP router carries.
+	r.Use(otelchimetric.NewServerRequestDuration(otelchimetric.NewBaseConfig(serviceName)))
 	r.Use(RequestLogger(logger))
 	r.Use(middleware.Recoverer)
 	r.Use(readOnlyCORSMiddleware())

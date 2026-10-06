@@ -1,3 +1,9 @@
+---
+paths:
+  - "docs/**"
+  - "apis/**"
+---
+
 # Docs & API drift: two OpenAPI specs, one AsyncAPI spec, one Docusaurus site
 
 ## Why there are TWO OpenAPI specs
@@ -8,7 +14,7 @@ read-only analytical database, with its own REST surface. That surface is
 documented in a SEPARATE spec from the OLTP API:
 
 - `apis/openapi.yaml` — the OLTP API (`cmd/labor`, port 8080): 6
-  endpoints plus `/healthz` — standards, performance and utilization reads. Spectral-linted in CI
+  endpoints plus `/healthz` and `/readyz` — standards, performance and utilization reads. Spectral-linted in CI
   (`api-lint` job) against `.spectral.yaml`.
 - `apis/openapi-reports.yaml` — the reports API (`cmd/labor-reports`, port
   8092): `GET /reports/performance`, `GET /reports/performance/freshness`,
@@ -24,9 +30,9 @@ ci.yml` for the current step list if a new spec is ever added.
 edit to add only one):
 
 - `labor` → `specPath: '../apis/openapi.yaml'`, outputs to
-  `docs/api-reference/rest/`.
+  `docs/docs/api-reference/rest/`.
 - `laborReports` → `specPath: '../apis/openapi-reports.yaml'`, outputs to
-  `docs/api-reference/rest-reports/`.
+  `docs/docs/api-reference/rest-reports/`.
 
 `docs/package.json` scripts:
 
@@ -46,7 +52,7 @@ to exist or the Docusaurus build fails at import time.
 
 CI's `docs-api-drift` job runs `npm run clean-api-docs:all && npm run
 gen-api-docs:all` in `docs/` and fails on any `git diff` under
-`docs/api-reference/rest` or `docs/api-reference/rest-reports`. Reproduce
+`docs/docs/api-reference/rest` or `docs/docs/api-reference/rest-reports`. Reproduce
 it locally before pushing a spec change.
 
 **When either `apis/openapi.yaml` or `apis/openapi-reports.yaml` changes:**
@@ -70,6 +76,10 @@ AsyncAPI contract is instead described narratively in:
   full CloudEvents example, and the outbound integration topic)
 - `docs/docs/ddd/subdomain-classification.md` (domain events and where
   they are published)
+- the DDD artifact pack under `docs/docs/ddd/` — above all
+  `domain-events.md` (every type, topic, key and payload field),
+  `bounded-context-canvas.md` (message tables),
+  `domain-message-flow.md`, `eventstorming.md` and `sequence-diagrams.md`
 - `docs/docs/adr/0007-analytical-data-product.md`,
   `docs/docs/adr/0010-transactional-outbox.md`,
   `docs/docs/adr/0013-labor-performance-integration-events.md`,
@@ -115,7 +125,7 @@ is a documented, accepted gap, not something to keep re-attempting.
 
 ## `docs.yml` trigger branch vs. the Pages environment's allowed branches
 
-`gh api repos/claudioed/labor-performance/environments/github-pages/
+`gh api repos/IQVO/labor-performance/environments/github-pages/
 deployment-branch-policies` shows **both `develop` and `main`** are
 allowed to deploy to the `github-pages` environment. But
 `.github/workflows/docs.yml`'s `on.push.branches` is `[main]` only — a

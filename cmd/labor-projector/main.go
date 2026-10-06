@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riandyrn/otelchi"
+	otelchimetric "github.com/riandyrn/otelchi/metric"
 
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
@@ -95,7 +97,7 @@ func run() error {
 		}
 	}()
 
-	srv := newAdminServer(adminAddr)
+	srv := newAdminServer(adminAddr, serviceName)
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -166,15 +168,23 @@ func openAnalyticsPool(ctx context.Context, logger *slog.Logger, analyticsURL, m
 
 // newAdminServer builds the projector's admin listener: a health endpoint
 // and nothing else — the projector serves no reports (that is the reader's
-// job) and exposes no other surface.
-func newAdminServer(addr string) *http.Server {
+// job) and exposes no other surface. The mux is wrapped in the same HTTP
+// RED instrumentation every other HTTP surface of this service carries
+// (ADR-0008 Tier 1 item 2): otelchi starts a span per request and
+// otelchimetric records http.server.request.duration. ServeMux patterns
+// are already static, so otelchi's default span naming is accurate here
+// and no chi router is needed just for route lookup.
+func newAdminServer(adminAddr, serviceName string) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
-	return &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	var handler http.Handler = mux
+	handler = otelchimetric.NewServerRequestDuration(otelchimetric.NewBaseConfig(serviceName))(handler)
+	handler = otelchi.Middleware(serviceName)(handler)
+	return &http.Server{Addr: adminAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 }
 
 // newLogger builds the process-wide structured logger, wrapped so any

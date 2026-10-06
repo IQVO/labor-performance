@@ -1,4 +1,9 @@
-# ADR index (0001–0021)
+---
+paths:
+  - "docs/docs/adr/**"
+---
+
+# ADR index (0001–0030)
 
 Full records live in `docs/docs/adr/` (Nygard format, Docusaurus-rendered
 at `/docs/adr`). This is a summary index — read the actual ADR before
@@ -14,19 +19,28 @@ relying on a detail not captured here.
 | 0006 | MeanActualSeconds on TaskTypePerformance, independent of any standard | Accepted | Why a real measured rate is tracked separately from EfficiencyPct. |
 | 0007 | Analytical data product | Accepted; envelope superseded by 0021 | The `cmd/labor-projector` + `cmd/labor-reports` split, the separate analytics topic/DB, the Labor Performance Report shape. See `.claude/rules/docs-and-api-drift.md` for the resulting two-OpenAPI-spec setup. |
 | 0008 | Standard metrics convention across the fleet | Accepted | Fleet-wide naming/shape conventions this service's metrics follow. |
-| 0009 | Model Context Protocol as an inbound adapter, not a new service | Accepted | MCP server lives in this repo (`internal/adapters/inbound/mcp/`, `cmd/mcp/`), not a separate service. |
+| 0009 | Model Context Protocol as an inbound adapter, not a new service | Accepted — auth/scope sections superseded by 0012 | MCP server lives in this repo (`internal/adapters/inbound/mcp/`, `cmd/mcp/`), not a separate service. |
 | 0010 | Transactional outbox for the analytics topic | Accepted; envelope superseded by 0021 | Domain event + `processed_events` marker + analytics event commit in one Postgres transaction; an in-process relay drains `outbox_events` onto `warehouse.labor-performance.analytics`. |
 | 0011 | REST identity — fleet-standard static bearer keys with read/read-write scopes | **Superseded by 0012** | Do not re-implement this pattern; it was deliberately removed. |
 | 0012 | Remove the REST/MCP identity layer | Accepted | Current state: no auth layer on REST or MCP. Read this before assuming any endpoint requires a bearer token. |
 | 0013 | Labor performance publishes an integration event | Accepted; envelope superseded by 0021 | `TaskPerformanceRecorded` also goes to the integration topic `warehouse.labor-performance.events` (via the same outbox), consumed by `workforce-management`. The analytics topic stays internal. |
 | 0014 | Measuring idleness and utilization | Accepted | `IdlePeriod` aggregate derived from consecutive `TaskCompleted` events (`IDLE_GAP_CAP_SECONDS`), additive `idle_seconds_before` on `TaskPerformanceRecorded`, the two `/utilization` endpoints and the `get_task_type_utilization` MCP tool. |
 | 0015 | Optional travel-time component on a LaborStandard | Accepted | Caller-supplied `TravelComponentSeconds` (`0 <= t <= ExpectedSeconds`); this service never calls facility-layout or any sibling to compute or validate it. |
-| 0016 | Transactional Idempotency-Key middleware for POST /standards | Accepted | Route-scoped, transactional Idempotency-Key HTTP middleware for `POST /standards`, this service's one true resource-creation endpoint; reuses the outbox's tx-in-context mechanism (`internal/pgtx`). Ported from order-management's reference (PR #105, ADR 0023). |
-| 0017 | Kafka consumer dead-letter queue and graceful shutdown hardening | Accepted | `Consumer.handleMessage` retries `handleFulfillmentEvent` in-process (cenkalti/backoff/v4, up to 3 attempts) then dead-letters an exhausted/poisoned message to `warehouse.fulfillment.events.dlq`, committing the offset so one poison message never blocks the partition. Graceful shutdown gains a readiness-flip-first sequence backing a new `GET /readyz` distinct from `GET /healthz`. Ported from order-management's DLQ/shutdown design (PR #107, ADR 0025) — this service has no sibling-context outbound calls, so no circuit breaker work applies here. |
+| 0016 | Transactional Idempotency-Key middleware for POST /standards | Accepted | Route-scoped, transactional Idempotency-Key HTTP middleware for `POST /standards`, this service's one true resource-creation endpoint; reuses the outbox's tx-in-context mechanism (`internal/pgtx`). Ported from order-management's reference (PR #105). |
+| 0017 | Kafka consumer dead-letter queue and graceful shutdown hardening | Accepted | `Consumer.handleMessage` retries `handleFulfillmentEvent` in-process (cenkalti/backoff/v4, up to 3 attempts) then dead-letters an exhausted/poisoned message to `warehouse.fulfillment.events.dlq`, committing the offset so one poison message never blocks the partition. Graceful shutdown gains a readiness-flip-first sequence backing a new `GET /readyz` distinct from `GET /healthz`. Ported from order-management's DLQ/shutdown design (order-management PR #107) — this service has no sibling-context outbound calls, so no circuit breaker work applies here. |
 | 0018 | Key-aware Hash balancer on every outbound Kafka writer | Accepted | Every writer in `internal/adapters/outbound/kafka` (`IntegrationPublisher`, `AnalyticsPublisher`, `RelaySink`) used `&kafkago.LeastBytes{}`, which ignores `Message.Key` for partition routing entirely — `Message.Key` (AssociateId / TaskType) was always set correctly but had no effect on partition placement. Switched every writer's `Balancer` to `&kafkago.Hash{}`. Same fleet-wide fix as order-management PR #111, closing the ordering gap warehouse-infra PR #42's 1→8 partition scaleup exposed. Proven via a real-broker Testcontainers test on an 8-partition topic. |
-| 0019 | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted | `autoscaling.<api\|projector\|reports\|frontend>` HPA blocks (all default-disabled) in `charts/labor-performance/values.yaml`, one `HorizontalPodAutoscaler` per independently-assessed workload; `mcp` deliberately excluded (in-memory MCP session state, no sticky routing). `postgres.MaxConns=10`/`StatementTimeout=5s` (OLTP, via PgBouncer) and `analyticsstore.MaxConns=5`/`ReportsMaxConns=5`/`StatementTimeout=10s`/`ReportsStatementTimeout=15s` (analytics, direct to Postgres). Ported from order-management's reference (PR #110, ADR 0026); mirrors warehouse-infra PR #43's PgBouncer OLTP/analytics DSN split as-is. |
-| 0020 | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted | `cmd/labor` and `cmd/mcp` now read `MIGRATIONS_DATABASE_URL` (fallback `DATABASE_URL`) for the golang-migrate step only; the runtime pgxpool stays on `DATABASE_URL`/PgBouncer unchanged. Fixes a fleet-wide crash-loop (`pq: unnamed prepared statement does not exist`) caused by `pg_advisory_lock`'s session-scoping being incompatible with PgBouncer transaction pooling (warehouse-infra PR #43) whenever 2+ replicas of `cmd/labor`/`cmd/mcp` start concurrently — including any ADR-0019 HPA scale-out. New chart value `database.migrationsExistingSecretKey` (`optional: true` secretKeyRef) wires the env var into both the `api` and `mcp` Deployments. Ported from order-management's reference (PR #115, ADR 0029); warehouse-infra PR #44 already provisions the secret key fleet-wide, `cmd/labor-projector`/`cmd/labor-reports` are out of scope (never on PgBouncer). |
+| 0019 | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted | `autoscaling.<api\|projector\|reports\|frontend>` HPA blocks (all default-disabled) in `charts/labor-performance/values.yaml`, one `HorizontalPodAutoscaler` per independently-assessed workload; `mcp` deliberately excluded (in-memory MCP session state, no sticky routing). `postgres.MaxConns=10`/`StatementTimeout=5s` (OLTP, via PgBouncer) and `analyticsstore.MaxConns=5`/`ReportsMaxConns=5`/`StatementTimeout=10s`/`ReportsStatementTimeout=15s` (analytics, direct to Postgres). Ported from order-management's reference (PR #110); mirrors warehouse-infra PR #43's PgBouncer OLTP/analytics DSN split as-is. |
+| 0020 | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted | `cmd/labor` and `cmd/mcp` now read `MIGRATIONS_DATABASE_URL` (fallback `DATABASE_URL`) for the golang-migrate step only; the runtime pgxpool stays on `DATABASE_URL`/PgBouncer unchanged. Fixes a fleet-wide crash-loop (`pq: unnamed prepared statement does not exist`) caused by `pg_advisory_lock`'s session-scoping being incompatible with PgBouncer transaction pooling (warehouse-infra PR #43) whenever 2+ replicas of `cmd/labor`/`cmd/mcp` start concurrently — including any ADR-0019 HPA scale-out. New chart value `database.migrationsExistingSecretKey` (`optional: true` secretKeyRef) wires the env var into both the `api` and `mcp` Deployments. Ported from order-management's reference (PR #115); warehouse-infra PR #44 already provisions the secret key fleet-wide, `cmd/labor-projector`/`cmd/labor-reports` are out of scope (never on PgBouncer). |
 | 0021 | CloudEvents 1.0 as the mandatory event envelope | Accepted | Every Kafka message produced or consumed (integration, analytics, and fulfillment-execution's TaskCompleted) is a CloudEvents 1.0 event in structured mode via `internal/adapters/kafka/cloudevents` (sdk-go v2 `event`). Flat envelope, analytics `schema_version`, and the dual-read decoder removed; consumers dispatch on the full `type`, dedupe on `id`, DLQ/skip anything invalid. Supersedes the envelope parts of 0003/0007/0010/0013. |
+| 0022 | Optimistic concurrency and one open standard per task type on labor_standards | Accepted | `labor_standards.version` guards `StandardRepo.Save` (`ports.ErrConcurrentModification`, 409); the partial unique index `idx_labor_standards_one_open_per_task_type` backstops "one open standard per TaskType" (`ports.ErrOpenStandardConflict`, 409). Migration 0006. |
+| 0023 | Housekeeping sweeper for idempotency keys and published outbox rows | Accepted | `postgres.Sweeper` in `cmd/labor` deletes `idempotency_keys` older than `IDEMPOTENCY_KEY_TTL` (24h) and PUBLISHED `outbox_events` older than `OUTBOX_RETENTION` (7d) every `HOUSEKEEPING_INTERVAL` (1h), in batches; unpublished rows are never swept. |
+| 0024 | labor-mfe: a chart-shipped, disabled-by-default frontend remote | Accepted | `web/` (`labor_mfe`) ships as its own nginx image + chart workload behind `frontend.enabled=false`; served by the Nginx web gateway, never Kong. |
+| 0025 | RFC 7807 Problem Details for every REST error | Accepted | Every OLTP and reports error is `application/problem+json` via `writeProblem`; `statusFor`/`problemFor` map typed errors to status + slug. |
+| 0026 | arch-go architecture fitness tests, enforced in CI | Accepted | `internal/architecture/*_test.go` enforce the hexagonal dependency rule and the OLTP/analytics split; CI `arch-test` job. |
+| 0027 | Boot-time dial retry (bootretry) + Kubernetes startupProbe | Accepted | `internal/adapters/outbound/bootretry` retries the migration run and DB ping at boot (Istio native-sidecar first-dial reset); the chart adds a startupProbe. |
+| 0028 | Gateway API HTTPRoute, disabled by default, alongside Ingress | Accepted | `charts/labor-performance/templates/httproute.yaml`, off by default. |
+| 0029 | Kafka writer durability: RequireAll acks + 10ms BatchTimeout | Accepted | `writer_config.go`'s `syncWriterRequiredAcks`/`syncWriterBatchTimeout` on every outbound writer, plus the DLQ writer. |
+| 0030 | MCP eval suite and governance gate, run as plain go test | Accepted | `governance_test.go` + `eval_*_test.go`/`evalsuite_test.go` (E1–E3) in `internal/adapters/inbound/mcp`; CI `test` and `evals-tests` jobs. |
 
 ## Reading order for a newcomer
 
@@ -49,16 +63,22 @@ relying on a detail not captured here.
    correctness fix, read whenever touching any `kafkago.Writer`
    construction in `internal/adapters/outbound/kafka`.
 9. 0019 (HPA + pgxpool tuning) — a fleet-wide scalability port from
-   order-management's reference (PR #110, ADR 0026), read whenever
+   order-management's reference (PR #110), read whenever
    touching `charts/labor-performance/values.yaml`'s `autoscaling:`
    block or either `pool.go`'s `MaxConns`/`StatementTimeout` constants.
 10. 0020 (migrations bypass PgBouncer) — a fleet-wide production-blocking
-    bug fix, ported from order-management's reference (PR #115, ADR 0029),
+    bug fix, ported from order-management's reference (PR #115),
     read whenever touching `cmd/labor/main.go`'s `buildPersistence`,
     `cmd/mcp/main.go`'s `buildAdapters`, or
     `charts/labor-performance/values.yaml`'s `database:` block — directly
     depends on 0019's HPA existing to matter (an HPA scale-out is the
     concrete trigger this ADR fixes).
+11. 0021 (the CloudEvents envelope every Kafka message uses) before
+    touching any publisher/consumer; 0022 (version column + one-open
+    partial index) before touching `StandardRepo`; 0023 (sweeper) with
+    0010/0016; 0024–0030 record mechanisms that already shipped (frontend
+    remote, RFC 7807, arch-go, bootretry, HTTPRoute, writer durability,
+    MCP evals) — read the one matching the code you touch.
 
 ## Proposing a new ADR
 

@@ -120,15 +120,13 @@ task's claim instant (`CompletedAt − ActualSeconds`).
 
 ## Ubiquitous language
 
-| Term | Meaning |
-| --- | --- |
-| **LaborStandard** | The expected duration for a TaskType, with append-only revision history. |
-| **TaskPerformance** | One scored, completed task — frozen against the standard active when it finished. |
-| **Scorecard** | A per-associate read-model projection over TaskPerformance rows. |
-| **TaskType** | PICK, PACK, or SLAM — mirrors `fulfillment-execution`'s `task.Type` enum exactly; no new values invented here. |
-| **EfficiencyPct** | `100 * StandardSecondsAtCompletion / ActualSeconds`, nullable, never computed by dividing by zero. |
-| **Idle Gap** | The between-task wait for one associate (`IdlePeriod`). |
-| **Utilization** | `1 − idle share` over a trailing window, as a percent; `null` when nothing was observed. |
+The full glossary — every term mapped to its code identifier, with the
+terms whose code name differs flagged — lives on the
+[Ubiquitous Language](./ubiquitous-language.md) page. The core terms are
+**LaborStandard**, **TaskPerformance**, **StandardSecondsAtCompletion**,
+**EfficiencyPct**, **TaskType** (PICK, PACK, SLAM — mirrors
+`fulfillment-execution`'s `task.Type` exactly), **Scorecard**,
+**TaskTypePerformance**, **Idle Gap** (`IdlePeriod`) and **Utilization**.
 
 ## Domain events (past tense)
 
@@ -139,4 +137,7 @@ own analytical projector (ADR 0007). `TaskPerformanceRecorded` also goes to
 the integration topic `warehouse.labor-performance.events` (ADR 0013), which
 `workforce-management` consumes. It carries an additive, nullable
 `idle_seconds_before` field (ADR 0014). With Postgres configured, both
-topics are fed through the transactional outbox (ADR 0010).
+topics are fed through the transactional outbox (ADR 0010). Full type
+strings, keys and payloads: [Domain Events](./domain-events.md). Where
+this classification sits on a ddd-crew Core Domain Chart:
+[Core Domain Chart](./core-domain-chart.md).

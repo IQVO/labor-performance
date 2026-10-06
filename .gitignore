@@ -2,3 +2,4 @@
 *.out
 .env
 coverage.out
+.claude/settings.local.json

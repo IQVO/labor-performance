@@ -1,9 +1,14 @@
+---
+name: how-to-add-a-frontend-remote
+description: Add or change a micro-frontend remote under web/ (vite federation config in object form, /mfes/<context>/ base, remoteEntry, Docker/nginx packaging, console integration). Use when touching web/.
+---
+
 # How to add a frontend remote
 
 Use when adding a new screen/feature to this repo's `web/` Module
 Federation remote (`labor-mfe`), which already exists and is the
-concrete worked example below — see `warehouse-console`'s
-`.claude/rules/mfe-remotes.md` for the shell-side half of this contract.
+concrete worked example below — the shell-side half of this contract (how the console
+mounts remotes) lives in the `warehouse-console` repo.
 
 ## `vite.config.ts` must stay in OBJECT form, always
 
@@ -134,7 +139,7 @@ service's own `internal/adapters/inbound/http/server.go`
 `CORS_ALLOWED_ORIGINS` default, predating this remote's own existence.
 Keep the two in sync if either the remote's dev port or the backend's
 CORS default ever changes. CI's `web:` job runs the sequence above
-against a dual checkout (this repo + `claudioed/warehouse-ui-kit@develop`)
+against a dual checkout (this repo + `IQVO/warehouse-ui-kit@develop`)
 — reproduce that locally by symlinking or checking out
 `warehouse-ui-kit` as a real sibling if `npm ci` behaves differently
 than CI.

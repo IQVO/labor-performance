@@ -93,12 +93,13 @@ func run() error {
 		return err
 	}
 
-	handlers := &inboundhttp.ReportsHandlers{
-		Store: analyticsstore.NewPostgresReport(pool),
-	}
 	srv := &http.Server{
-		Addr:              httpAddr,
-		Handler:           inboundhttp.NewReportsRouter(handlers, logger),
+		Addr: httpAddr,
+		Handler: inboundhttp.NewReportsRouter(
+			&inboundhttp.ReportsHandlers{Store: analyticsstore.NewPostgresReport(pool)},
+			logger,
+			serviceName,
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

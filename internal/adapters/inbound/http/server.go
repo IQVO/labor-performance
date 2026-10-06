@@ -25,6 +25,10 @@ import (
 // service.name.
 const DefaultServiceName = "labor-performance"
 
+// DefaultReportsServiceName is the reports reader's equivalent default
+// (cmd/labor-reports), matching that binary's OTEL_SERVICE_NAME fallback.
+const DefaultReportsServiceName = "labor-performance-reports"
+
 // Server holds every use case the HTTP adapter depends on.
 type Server struct {
 	DefineStandard         *usecases.DefineStandard
@@ -320,9 +324,15 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 // is added alongside a service's first console-facing REST surface.
 func corsMiddleware() func(http.Handler) http.Handler {
 	return cors.Handler(cors.Options{
-		AllowedOrigins:   allowedOrigins(),
-		AllowedMethods:   []string{http.MethodGet, http.MethodPost},
-		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowedOrigins: allowedOrigins(),
+		AllowedMethods: []string{http.MethodGet, http.MethodPost},
+		// Idempotency-Key is listed alongside Authorization (kept from the
+		// pre-ADR-0012 auth layer; the architecture fitness test tolerates
+		// it) because POST /standards's idempotency middleware (ADR-0016)
+		// requires the header: a browser (the labor-mfe remote) sending it
+		// on a preflighted POST would be rejected by the browser itself
+		// without an explicit allow entry.
+		AllowedHeaders:   []string{"Content-Type", "Authorization", "Idempotency-Key"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	})

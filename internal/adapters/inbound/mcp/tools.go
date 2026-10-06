@@ -171,8 +171,10 @@ func addTool[In, Out any](
 		out, err := handle(ctx, in)
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String("mcp.tool.outcome", "error"))
 			return nil, zero, err
 		}
+		span.SetAttributes(attribute.String("mcp.tool.outcome", "ok"))
 		return nil, out, nil
 	})
 }

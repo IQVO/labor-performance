@@ -8,8 +8,9 @@ import apiReportsSidebar from './docs/api-reference/rest-reports/sidebar';
 
 /**
  * Top-level categories mirror the shape shared across warehouse-systems
- * documentation sites: Overview, Business Context, Domain-Driven Design,
- * API Reference, API Reference (Reports), Ecosystem, MCP governance,
+ * documentation sites: Overview, Business Context, Domain-Driven Design
+ * (plus the ddd-crew artifact pack), API Reference, API Reference
+ * (Reports), Ecosystem, MCP governance,
  * Architecture Decision Records.
  */
 const sidebars: SidebarsConfig = {
@@ -17,6 +18,23 @@ const sidebars: SidebarsConfig = {
     'overview',
     'business-context/domain-vision',
     'ddd/subdomain-classification',
+    {
+      type: 'category',
+      label: 'DDD artifacts (ddd-crew)',
+      link: {type: 'doc', id: 'ddd/ddd-artifacts'},
+      items: [
+        'ddd/core-domain-chart',
+        'ddd/bounded-context-canvas',
+        'ddd/aggregate-design-canvas',
+        'ddd/domain-message-flow',
+        'ddd/eventstorming',
+        'ddd/ubiquitous-language',
+        'ddd/class-diagram',
+        'ddd/entity-relationship',
+        'ddd/sequence-diagrams',
+        'ddd/domain-events',
+      ],
+    },
     {
       type: 'category',
       label: 'API Reference',
@@ -57,6 +75,15 @@ const sidebars: SidebarsConfig = {
         'adr/0019-horizontal-autoscaling-and-pgxpool-tuning',
         'adr/0020-migrations-direct-postgres-connection',
         'adr/0021-cloudevents-mandatory-event-envelope',
+        'adr/0022-optimistic-concurrency-one-open-standard',
+        'adr/0023-housekeeping-sweeper',
+        'adr/0024-labor-mfe-frontend-remote',
+        'adr/0025-rfc7807-problem-details',
+        'adr/0026-arch-go-fitness-suite',
+        'adr/0027-bootretry-and-startup-probe',
+        'adr/0028-gateway-api-httproute',
+        'adr/0029-kafka-writer-durability',
+        'adr/0030-mcp-eval-and-governance-gates',
       ],
     },
   ],

@@ -25,6 +25,12 @@ func TestNewConsumerForTopic_DLQWriterAutoCreatesTopic(t *testing.T) {
 	if c.dlqWriter.BatchTimeout != dlqBatchTimeout {
 		t.Fatalf("DLQ BatchTimeout = %v, want %v (kafka-go's 1s default caps dead-lettering at ~1 msg/s)", c.dlqWriter.BatchTimeout, dlqBatchTimeout)
 	}
+	if c.dlqWriter.RequiredAcks != dlqRequiredAcks {
+		t.Fatalf("DLQ RequiredAcks = %v, want %v (RequireNone would report a dead-lettered message stored before the broker actually stored it)", c.dlqWriter.RequiredAcks, dlqRequiredAcks)
+	}
+	if _, ok := c.dlqWriter.Balancer.(*kafkago.Hash); !ok {
+		t.Fatalf("DLQ Balancer = %T, want *kafkago.Hash (align with every outbound Kafka writer in the fleet, ADR-0018)", c.dlqWriter.Balancer)
+	}
 }
 
 type scriptedDLQWriter struct {

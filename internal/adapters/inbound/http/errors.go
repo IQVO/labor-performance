@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
 	"github.com/claudioed/labor-performance/internal/domain/performance"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
@@ -16,6 +17,10 @@ func statusFor(err error) int {
 	case errors.Is(err, usecases.ErrStandardNotFound),
 		errors.Is(err, usecases.ErrAssociateNotFound):
 		return http.StatusNotFound
+
+	case errors.Is(err, ports.ErrConcurrentModification),
+		errors.Is(err, ports.ErrOpenStandardConflict):
+		return http.StatusConflict
 
 	case errors.Is(err, shared.ErrUnknownTaskType),
 		errors.Is(err, performance.ErrEmptyEventId),
@@ -55,6 +60,11 @@ func problemFor(err error) problemInfo {
 		return problemInfo{"standard-not-found", "No active labor standard for this task type"}
 	case errors.Is(err, usecases.ErrAssociateNotFound):
 		return problemInfo{"associate-not-found", "No task performance recorded for this associate"}
+
+	case errors.Is(err, ports.ErrConcurrentModification):
+		return problemInfo{"concurrent-modification", "The standard was concurrently modified; reload and retry"}
+	case errors.Is(err, ports.ErrOpenStandardConflict):
+		return problemInfo{"standard-conflict", "Another standard is already open for this task type"}
 
 	case errors.Is(err, shared.ErrUnknownTaskType):
 		return problemInfo{"unknown-task-type", "Task type must be PICK, PACK, or SLAM"}

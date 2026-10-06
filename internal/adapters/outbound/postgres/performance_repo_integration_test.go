@@ -14,19 +14,9 @@ import (
 )
 
 func TestPostgres_PerformanceRoundTrip(t *testing.T) {
-	databaseURL := requireDatabaseURL(t)
-	if err := postgres.RunMigrations(databaseURL, migrationsDir(t)); err != nil {
-		t.Fatalf("unexpected error running migrations: %v", err)
-	}
-
-	ctx := context.Background()
-	pool, err := postgres.NewPool(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("unexpected error opening pool: %v", err)
-	}
-	defer pool.Close()
-
+	pool := testDB(t)
 	repo := postgres.NewPerformanceRepo(pool)
+	ctx := context.Background()
 
 	eventId := fmt.Sprintf("it-evt-%d", time.Now().UnixNano())
 	taskId := fmt.Sprintf("it-task-%d", time.Now().UnixNano())
@@ -83,19 +73,9 @@ func TestPostgres_PerformanceRoundTrip(t *testing.T) {
 }
 
 func TestPostgres_ProcessedEventIdempotency(t *testing.T) {
-	databaseURL := requireDatabaseURL(t)
-	if err := postgres.RunMigrations(databaseURL, migrationsDir(t)); err != nil {
-		t.Fatalf("unexpected error running migrations: %v", err)
-	}
-
-	ctx := context.Background()
-	pool, err := postgres.NewPool(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("unexpected error opening pool: %v", err)
-	}
-	defer pool.Close()
-
+	pool := testDB(t)
 	repo := postgres.NewProcessedEventRepo(pool)
+	ctx := context.Background()
 	eventId := fmt.Sprintf("it-processed-%d", time.Now().UnixNano())
 
 	firstTime, err := repo.MarkProcessed(ctx, eventId)

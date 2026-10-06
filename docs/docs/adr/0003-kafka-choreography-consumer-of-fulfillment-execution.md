@@ -99,18 +99,15 @@ side-projection* — here it gates the **entire OLTP write path**, since
 consuming `TaskCompleted` IS this service's whole job, not a side effect
 of it.
 
-**A known, accepted wire-contract gap:** `fulfillment-execution`'s
-`TaskCompletedData` (verified this session against its actual
-`feature/labor-performance-hooks` publisher) does not carry a `task_type`
-field at all. This service resolves `TaskType` as `""` (unclassified) for
-every event as a result — see `shared.ParseTaskTypeLenient`'s doc comment.
-This is documented, not silently absorbed: CLAUDE.md's explicit instruction
-to "degrade gracefully" rather than block the build on that PR's timing
-extends to this field too. A `""`-typed `TaskPerformance` is still
-recorded and counted in a hypothetical "all types" view, but never
-resolves a `LaborStandard` (no lookup is possible without a known type)
-and never appears under any `GetTaskTypePerformance` query (those require
-one of the three known enum values).
+**A wire-contract gap, closed:** `fulfillment-execution`'s
+`TaskCompletedData` originally did not carry a `task_type` field, so this
+service resolved `TaskType` as `""` (unclassified) for every event — see
+`shared.ParseTaskTypeLenient`'s doc comment. `fulfillment-execution`'s own
+ADR-0023 added `task_type` to that payload; this service's consumer
+(`consumer.go`) now reads it directly (`data.TaskType`, handed through
+`ParseTaskTypeLenient` unchanged — an unrecognized/absent value still
+degrades to `""`), closing the gap recorded here. See README.md's "Known
+gaps" section and ADR-0014's own note on the same closure.
 
 ## Consequences
 

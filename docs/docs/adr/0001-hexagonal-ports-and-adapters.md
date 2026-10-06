@@ -77,15 +77,26 @@ Concretely:
   [ADR 0003](./0003-kafka-choreography-consumer-of-fulfillment-execution.md)).
 - `internal/application/usecases/` holds **one struct per use case**
   (`DefineStandard`, `GetStandard`, `RecordTaskPerformance`,
-  `GetAssociateScorecard`, `GetTaskTypePerformance`), with collaborators as
-  plain fields. No use case imports an adapter package.
+  `GetAssociateScorecard`, `GetTaskTypePerformance`, `GetUtilization`),
+  with collaborators as plain fields. No use case imports an adapter
+  package.
 - `internal/adapters/` implements the ports: `inbound/http` (chi, DTOs,
   RFC 7807 error mapping), `inbound/kafka` (the `TaskCompleted` consumer),
-  `outbound/postgres`, `outbound/memory`, `outbound/events` (log
-  publisher).
-- `cmd/labor/main.go` is the **only** composition root — the only file
-  that reads environment variables and the only file that knows both a
-  port and its implementation.
+  `inbound/mcp` (the MCP read adapter, [ADR
+  0009](./0009-mcp-inbound-adapter.md)), `outbound/postgres`,
+  `outbound/memory`, `outbound/events` (log publisher),
+  `outbound/kafka` (the outbox relay sink).
+- Four composition roots now exist, each the only file in its binary
+  that reads environment variables for its own concerns: `cmd/labor`
+  (the OLTP HTTP + Kafka-consumer service — also the only one with
+  `StandardRepo`/`PerformanceRepo` writers), `cmd/mcp` (the MCP server,
+  ADR 0009), `cmd/labor-reports` (the analytics reader, ADR 0007), and
+  `cmd/labor-projector` (the analytics projector admin server). Every
+  root reads its OWN env vars for its own concerns (e.g. `cmd/labor`
+  reads `CORS_ALLOWED_ORIGINS` in `server.go`'s router builder and every
+  root reads `ENVIRONMENT` via `telemetry.Environment`) — the rule is
+  "no env var read outside a composition root," not "only one root may
+  exist."
 
 `Clock` is a port for the same reason the repositories are: "as of
 `CompletedAt`" resolution and standard-revision timestamps are domain
@@ -131,5 +142,7 @@ exact instead of tolerance-based.
   ordering; the tests do.
 - **The rule is easy to violate under deadline pressure.** Nothing stops a
   use case importing `net/http` or `kafka-go` directly. The sibling
-  services close that gap with arch-go fitness tests; adopting one here is
-  deferred (see the README), and until then the rule is upheld by review.
+  services closed that gap with arch-go fitness tests; this context has
+  adopted the same tooling (`internal/architecture/fitness_test.go`, run
+  by the `arch-test` CI job), so the rule is now enforced by the build,
+  not only by review.
