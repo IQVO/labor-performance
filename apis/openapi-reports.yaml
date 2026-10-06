@@ -27,7 +27,7 @@ info:
     name: MIT
   contact:
     name: Labor Performance Team
-    url: https://github.com/claudioed/labor-performance
+    url: https://github.com/IQVO/labor-performance
 servers:
   - url: http://localhost:8092
     description: Local development (cmd/labor-reports, HTTP_ADDR default :8092)

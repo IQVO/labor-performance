@@ -34,7 +34,7 @@ a reader grepping for the business word knows what to search for instead.
 | **Idle Gap** | One associate's wait from finishing a task to claiming the next. | `idleness.IdlePeriod`; table `idle_periods` | **yes** — `IdlePeriod` |
 | **Claim instant** | When the next task was claimed, derived as completion time − actual seconds. | `claimedAt` in `RecordTaskPerformance.recordIdleGap` | no |
 | **Capped** | The idle gap exceeded `IDLE_GAP_CAP_SECONDS` and was clipped. | `IdlePeriod.Capped()`; column `capped` | no |
-| **Open Gap** | Idle time still running right now; computed at read time, never stored. | `openGapSeconds` in `usecases/get_utilization.go`; JSON `openGapSeconds` | no |
+| **Open Gap** | Idle time still running right now; computed at read time, never stored. Per associate only: the task-type utilization result always reports 0. | `openGapSeconds` in `usecases/get_utilization.go`; JSON `openGapSeconds` | no |
 | **Utilization** | Task time ÷ (task time + idle time) over a trailing window, as a percent; null when nothing was observed. | `idleness.UtilizationPct`, `usecases.GetUtilization`, `UtilizationResult.UtilizationPct` | no |
 | **Window** | The trailing period utilization is measured over (default 1 h). | REST query `window` (Go duration), MCP `windowSeconds`; `defaultUtilizationWindow` | no |
 | **Idle seconds before** | The idle gap preceding a task, carried on the published event. | `TaskPerformanceRecorded.IdleSecondsBefore`; wire `idle_seconds_before` | no |
