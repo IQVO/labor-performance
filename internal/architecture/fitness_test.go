@@ -505,3 +505,109 @@ func anyContains(items []string, sub string) bool {
 	}
 	return false
 }
+
+// domainStructTagRE matches a raw-string struct tag (backtick-delimited,
+// \x60) carrying a `json:"` or `db:"` key. Wire and persistence shapes are
+// adapter concerns (tier-2 item 1a): the domain describes behaviour, and
+// adapters own DTOs / row structs with explicit mapping functions.
+var domainStructTagRE = regexp.MustCompile(`\x60[^\x60]*\b(json|db):"`)
+
+// domainStructTagExceptions whitelists domain files that legitimately carry
+// json/db tags, keyed by path relative to the module root, value = reason.
+// Empty on purpose: add an entry only with a written justification.
+var domainStructTagExceptions = map[string]string{}
+
+// domainStructTagViolations returns one message per non-comment line of the
+// Go source at path that carries a json:"/db:" struct tag. Pure over (path)
+// so the fixture test can feed it a bad file.
+func domainStructTagViolations(t *testing.T, path string) []string {
+	t.Helper()
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var out []string
+	lineNo := 0
+	scanner := bufio.NewScanner(strings.NewReader(string(src)))
+	for scanner.Scan() {
+		lineNo++
+		line := scanner.Text()
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		if domainStructTagRE.MatchString(line) {
+			out = append(out, fmt.Sprintf("%s:%d: domain struct carries a json/db tag (%q) — wire/persistence shape is an adapter concern; move it to an adapter-owned DTO with an explicit mapping function", path, lineNo, strings.TrimSpace(line)))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan %s: %v", path, err)
+	}
+	return out
+}
+
+// TestNoStructTagsInDomain: no non-test file under internal/domain/** may
+// carry `json:"` or `db:"` struct tags (comment lines skipped). Serialisation
+// lives in adapters (log/Kafka/HTTP DTOs, postgres row structs).
+func TestNoStructTagsInDomain(t *testing.T) {
+	for _, path := range goFilesUnder(t, "../domain", false) {
+		if reason, ok := domainStructTagExceptions[filepath.ToSlash(strings.TrimPrefix(path, "../"))]; ok {
+			t.Logf("%s: whitelisted: %s", path, reason)
+			continue
+		}
+		for _, v := range domainStructTagViolations(t, path) {
+			t.Error(v)
+		}
+	}
+}
+
+// TestNoStructTagsInDomainSensorFailsOnBadFixtures proves the sensor above
+// can actually fail, and that comments / compliant structs pass.
+func TestNoStructTagsInDomainSensorFailsOnBadFixtures(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantErr string // substring of a violation; "" means no violation expected
+	}{
+		{
+			name:    "json tag",
+			body:    "package x\n\ntype E struct {\n	Name string `json:\"eventName\"`\n}\n",
+			wantErr: "carries a json/db tag",
+		},
+		{
+			name:    "db tag",
+			body:    "package x\n\ntype E struct {\n	Name string `db:\"name\"`\n}\n",
+			wantErr: "carries a json/db tag",
+		},
+		{
+			name:    "json tag with options among other tags",
+			body:    "package x\n\ntype E struct {\n	Name string `yaml:\"n\" json:\"n,omitempty\"`\n}\n",
+			wantErr: "carries a json/db tag",
+		},
+		{
+			name: "untagged struct is fine",
+			body: "package x\n\ntype E struct {\n	Name string\n}\n",
+		},
+		{
+			name: "comment mention is not a violation",
+			body: "package x\n\n// Name used to be `json:\"eventName\"` before the DTO move.\ntype E struct {\n	Name string\n}\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "fixture.go")
+			if err := os.WriteFile(p, []byte(tc.body), 0o600); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			got := domainStructTagViolations(t, p)
+			if tc.wantErr == "" {
+				if len(got) != 0 {
+					t.Fatalf("compliant fixture reported violations: %v", got)
+				}
+				return
+			}
+			if !anyContains(got, tc.wantErr) {
+				t.Fatalf("sensor did not flag the bad fixture (want substring %q), got %v", tc.wantErr, got)
+			}
+		})
+	}
+}
