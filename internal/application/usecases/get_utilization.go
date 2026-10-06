@@ -42,7 +42,10 @@ type UtilizationResult struct {
 	// OpenGapSeconds is the still-running idle time for a subject idle
 	// right now: now - lastCompletedAt (or last idle-gap EndedAt),
 	// clamped to the window. Zero when the subject is not currently
-	// idle, or the last-known activity predates the window.
+	// idle, or the last-known activity predates the window. Only
+	// ForAssociate computes it; ForTaskType always leaves it 0 (an open
+	// gap has no task type until the associate's next claim ends it, and
+	// ADR 0014 defines it per associate).
 	OpenGapSeconds int64
 	// UtilizationPct is 100 * TaskSeconds / (TaskSeconds + IdleSeconds +
 	// OpenGapSeconds), nil when there was nothing to compute a share of
@@ -63,7 +66,8 @@ type GetUtilization struct {
 }
 
 // ForTaskType computes UtilizationResult for taskType over window
-// (defaultUtilizationWindow when window<=0).
+// (defaultUtilizationWindow when window<=0). It reports recorded (closed)
+// idle gaps only; OpenGapSeconds is always 0 — see UtilizationResult.
 func (uc *GetUtilization) ForTaskType(ctx context.Context, taskType shared.TaskType, window time.Duration) (UtilizationResult, error) {
 	window = resolveWindow(window)
 	now := uc.now()

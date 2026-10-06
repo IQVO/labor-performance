@@ -105,7 +105,7 @@ info:
     aggregate invariants already model, not an error.
   contact:
     name: Labor Performance Team
-    url: https://github.com/claudioed/labor-performance
+    url: https://github.com/IQVO/labor-performance
     email: labor-performance@warehouse-systems.internal
   license:
     name: MIT
@@ -191,9 +191,9 @@ channels:
       `TaskCompleted` from fulfillment-execution but published nothing any
       sibling service could subscribe to. Publishing is opt-in via
       `EVENT_PUBLISHER=kafka`; the default remains the log publisher. The
-      intended first consumer is workforce-management, building an
-      event-fed local cache to replace a synchronous HTTP call (a parallel
-      change to this one).
+      first consumer is workforce-management, whose event-fed local cache
+      (`laborperformancecache`) already consumes this topic in place of a
+      synchronous HTTP call.
     publish:
       operationId: publishLaborIntegrationEvents
       summary: Publish TaskPerformanceRecorded for other bounded contexts to consume.
