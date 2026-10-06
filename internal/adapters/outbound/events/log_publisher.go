@@ -30,7 +30,7 @@ func NewLogPublisher(logger *slog.Logger) *LogPublisher {
 
 func (p *LogPublisher) Publish(ctx context.Context, events ...shared.DomainEvent) error {
 	for _, event := range events {
-		payload, err := json.Marshal(event)
+		payload, err := json.Marshal(logPayload(event))
 		if err != nil {
 			return err
 		}
