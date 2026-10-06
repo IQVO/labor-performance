@@ -147,6 +147,7 @@ transactional outbox when `DATABASE_URL` is set (ADR 0010).
 | `GET` | `/task-types/{taskType}/utilization` | GetUtilization.ForTaskType |
 | `GET` | `/associates/{associateId}/utilization` | GetUtilization.ForAssociate |
 | `GET` | `/healthz` | Liveness probe |
+| `GET` | `/readyz` | Readiness probe (503 once graceful shutdown starts, ADR 0017) |
 
 There is deliberately **no** REST endpoint for `RecordTaskPerformance` — it
 is exclusively Kafka-consumer-driven. Every error is RFC 7807

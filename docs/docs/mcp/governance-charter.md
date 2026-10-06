@@ -12,9 +12,12 @@ warehouse-systems: one set of global standards, enforced the same way in every
 repository, while each bounded context owns its own server. It is the MCP
 counterpart to the platform's existing 5-stage quality gate and its ADR
 discipline. `fulfillment-execution` is the reference implementation
-(see [its ADR-0008](https://github.com/claudioed/fulfillment-execution)); the
-other five contexts — `inventory-storage`, `wes-work-planning`,
-`workforce-management`, `facility-layout`, `labor-performance` — copy it. In
+(see [its ADR-0008](https://github.com/IQVO/fulfillment-execution)); every
+other context that ships an MCP server copies it — the federated registry
+`internal/adapters/inbound/mcp/testdata/fleet_tool_snapshot.golden` lists
+tools for `facility-layout`, `fulfillment-execution`, `inventory-storage`,
+`labor-performance`, `order-management`, `process-path-management`,
+`wes-work-planning` and `workforce-management`. In
 `labor-performance` the adopting decision is
 [ADR-0009](../adr/0009-mcp-inbound-adapter.md).
 
@@ -199,5 +202,6 @@ Jaeger and Grafana alongside HTTP.
 ## 11. Changing this charter
 
 This charter is versioned with the docs. A change to a global standard **MUST**
-be proposed as a PR and, because it binds all five contexts, **SHOULD** be
+be proposed as a PR and, because it binds every context that ships an MCP
+server, **SHOULD** be
 recorded as an ADR when it changes an architecturally significant rule.

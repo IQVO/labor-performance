@@ -15,7 +15,9 @@ bounded-context Go service in this fleet, after `order-management`,
 `inventory-storage`, `wes-work-planning`, `workforce-management`,
 `fulfillment-execution`, `facility-layout`, and `warehouse-ops-agent`.
 
-📚 **Full documentation site:** https://claudioed.github.io/labor-performance/
+📚 **Full documentation site:** https://iqvo.github.io/labor-performance/
+(includes the ddd-crew DDD artifact pack — canvases, context map,
+EventStorming, class/ER/sequence diagrams — under *DDD artifacts*).
 
 ## Why this context exists
 
@@ -97,7 +99,10 @@ internal/
                                    and it must not import them (arch-go enforced)
   adapters/
     inbound/http/                 chi handlers, DTOs, RFC 7807 error mapping;
-                                   reports_handler.go serves the read model
+                                   reports_handler.go serves the read model;
+                                   idempotency.go — Idempotency-Key on POST
+                                   /standards (ADR 0016); readiness.go — /readyz
+                                   (ADR 0017)
     inbound/kafka/                consumer.go        — warehouse.fulfillment.events
                                                        (TaskCompleted only, OLTP)
                                    analytics_consumer.go — warehouse.labor-performance
@@ -107,7 +112,9 @@ internal/
                                    full type constants — ADR 0021), otelkafka
     outbound/postgres/            pgxpool repos + golang-migrate runner (OLTP DB);
                                    unit_of_work.go, outbox_publisher.go, outbox_relay.go
-                                   — the transactional outbox (ADR 0010)
+                                   — the transactional outbox (ADR 0010);
+                                   sweeper.go — housekeeping (ADR 0023)
+    outbound/bootretry/           boot-time dial retry for migrations/DB ping (ADR 0027)
     outbound/analyticsstore/      analytical DB: writer projection, read-only
                                    reader, in-memory store for tests
     outbound/memory/              in-memory repos for tests/local
@@ -115,9 +122,11 @@ internal/
     outbound/kafka/               analytics + integration publishers, relay sink,
                                    fan-out (EVENT_PUBLISHER=kafka)
     outbound/telemetry/           OTel traces/metrics/logs (copied from workforce-management)
-migrations/                       golang-migrate SQL files (OLTP schema)
-migrations/analytics/             golang-migrate SQL files (analytical schema)
-apis/openapi.yaml                 This service's OWN OLTP REST API (6 endpoints + /healthz)
+  pgtx/                           the one tx-in-context mechanism shared by the
+                                   idempotency middleware and the Postgres UnitOfWork
+migrations/                       golang-migrate SQL files (OLTP schema, 0001–0006)
+migrations/analytics/             golang-migrate SQL files (analytical schema, 0001)
+apis/openapi.yaml                 This service's OWN OLTP REST API (6 endpoints + /healthz + /readyz)
 apis/openapi-reports.yaml         The read-only reports API (ADR 0007)
 apis/asyncapi.yaml                What this service SUBSCRIBES TO and PUBLISHES
 docker-compose.yml                Local Postgres 16 (OLTP :5435, analytics :5436)
@@ -257,11 +266,15 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 | --- | --- | --- |
 | `HTTP_ADDR` | `:8080` | Listen address. |
 | `DATABASE_URL` | *(unset)* | Postgres DSN. Unset ⇒ in-memory adapters. |
+| `MIGRATIONS_DATABASE_URL` | *(falls back to `DATABASE_URL`)* | Direct (non-PgBouncer) DSN used only for the golang-migrate step ([ADR 0020](docs/docs/adr/0020-migrations-direct-postgres-connection.md)). |
 | `MIGRATIONS_PATH` | `migrations` | golang-migrate source directory. |
 | `KAFKA_BROKERS` | `localhost:9092` | Comma-separated broker addresses. |
 | `KAFKA_CONSUMER_GROUP` | `labor-performance` | Consumer group id on `warehouse.fulfillment.events`. |
 | `EVENT_PUBLISHER` | `log` | `log` or `kafka`. With `kafka`, domain events are fanned onto `warehouse.labor-performance.analytics` and `warehouse.labor-performance.events` (ADR 0013); when `DATABASE_URL` is also set they go through the transactional outbox (`outbox_events` + in-process relay, [ADR 0010](docs/docs/adr/0010-transactional-outbox.md)), otherwise straight to the broker. |
 | `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration; only used in outbox mode). |
+| `HOUSEKEEPING_INTERVAL` | `1h` | How often the housekeeping sweeper runs ([ADR 0023](docs/docs/adr/0023-housekeeping-sweeper.md)); only with `DATABASE_URL`. |
+| `IDEMPOTENCY_KEY_TTL` | `24h` | Age after which `idempotency_keys` rows are swept (ADR 0016/0023). |
+| `OUTBOX_RETENTION` | `168h` (7d) | Age after which PUBLISHED `outbox_events` rows are swept; unpublished rows are never swept. |
 | `IDLE_GAP_CAP_SECONDS` | `3600` | Upper bound on a recorded idle gap (a capped gap is stored with `capped: true`); malformed/non-positive values fall back to the default ([ADR 0014](docs/docs/adr/0014-labor-utilization-idleness.md)). |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:5187` | Comma-separated allowed origins (also read by `cmd/labor-reports`). |
 | `OTEL_SERVICE_NAME` | `labor-performance` | OTel `service.name` resource attribute. |
@@ -270,7 +283,9 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 | `ENVIRONMENT` | `local` | OTel `deployment.environment.name` resource attribute. |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
 
-The other binaries read the same `LOG_LEVEL`/`OTEL_*`/`SERVICE_VERSION` set, plus:
+The other binaries read the same `LOG_LEVEL`/`OTEL_EXPORTER_OTLP_ENDPOINT`/`SERVICE_VERSION` set
+(their `OTEL_SERVICE_NAME` defaults are `labor-performance-projector`,
+`labor-performance-reports` and `labor-performance-mcp`), plus:
 
 | Binary | Variable | Default | Purpose |
 | --- | --- | --- | --- |
@@ -281,11 +296,14 @@ The other binaries read the same `LOG_LEVEL`/`OTEL_*`/`SERVICE_VERSION` set, plu
 | `cmd/labor-reports` | `ANALYTICS_DATABASE_URL` | *(required)* | Analytical Postgres DSN (read-only pool). |
 | `cmd/labor-reports` | `HTTP_ADDR` | `:8092` | Reports API listener. |
 | `cmd/mcp` | `MCP_ADDR` | `:8090` | Streamable HTTP listener. |
-| `cmd/mcp` | `DATABASE_URL` / `MIGRATIONS_PATH` | *(unset)* / `migrations` | Same OLTP store as `cmd/labor`; unset ⇒ in-memory. |
+| `cmd/mcp` | `DATABASE_URL` / `MIGRATIONS_DATABASE_URL` / `MIGRATIONS_PATH` | *(unset)* / *(falls back to `DATABASE_URL`)* / `migrations` | Same OLTP store as `cmd/labor`; unset ⇒ in-memory. |
+
+None of the binaries exposes a Prometheus `/metrics` endpoint: metrics are
+pushed over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (ADR 0008).
 
 ## API
 
-Six endpoints plus a liveness probe. The full contract, including the RFC
+Six endpoints plus liveness and readiness probes. The full contract, including the RFC
 7807 error schema, is in [`apis/openapi.yaml`](apis/openapi.yaml).
 
 | Method | Path | Use case |
@@ -297,6 +315,7 @@ Six endpoints plus a liveness probe. The full contract, including the RFC
 | `GET` | `/task-types/{taskType}/utilization?window=1h` | GetUtilization (ADR 0014) |
 | `GET` | `/associates/{associateId}/utilization?window=1h` | GetUtilization (ADR 0014) |
 | `GET` | `/healthz` | Liveness probe |
+| `GET` | `/readyz` | Readiness probe — flips to 503 as the first step of graceful shutdown ([ADR 0017](docs/docs/adr/0017-kafka-dlq-and-graceful-shutdown.md)) |
 
 The read-only reports API (`cmd/labor-reports`,
 [`apis/openapi-reports.yaml`](apis/openapi-reports.yaml)) serves
@@ -412,6 +431,9 @@ make check-all   # check + coverage (gate: 90% on domain + application + analyti
 | `mutation-fast` / `mutation` | gremlins on `./internal/domain/performance` / `./internal/domain` |
 | `vuln` / `api-lint` | govulncheck / Spectral on all three specs |
 | `integration-kafka-testcontainers` | Build-tagged consumer test against a Testcontainers Kafka broker (needs Docker only) |
+| `contract` | Schemathesis contract tests over `apis/openapi.yaml` (`scripts/contract-test.sh`) |
+| `check-fast` | fmt-check + vet + arch-test — the quick pre-"done" gate |
+| `guide-lint` / `harness-test` | Lint the agent guides (skills, references, context budget) / unit-test the agent hooks |
 
 Additional verification surfaces, each with its own CI job:
 
@@ -439,7 +461,10 @@ lefthook install
 ```
 
 CI (`.github/workflows/ci.yml`) runs the full fleet-standard matrix:
-**`lint`**, **`test`**, **`bdd`**, **`integration`** (Postgres service
+**`lint`**, **`guide-lint`** (agent-guide and harness lint), **`complexity`**
+(gocyclo/gocognit/cyclop/funlen/nestif), **`test`**, **`bdd`**,
+**`contract`** (Schemathesis over `apis/openapi.yaml`), **`evals-tests`**
+(MCP evals E1–E3, ADR 0030), **`integration`** (Postgres service
 container + testcontainers), **`mutation-fast`** (blocking,
 `./internal/domain/performance`) and **`mutation`** (exhaustive,
 scheduled/manual, `./internal/domain`), **`api-lint`** (Spectral against
@@ -457,7 +482,24 @@ auto-tagged GitHub release + published Helm chart). Plus
 
 ## Known gaps
 
-None currently open. The previous entry here — `fulfillment-execution`'s
+Found while refreshing these docs against the code on `develop`
+(reported, not fixed here — they are code changes):
+
+- **The `labor_mfe` remote does not send `Idempotency-Key`.**
+  `web/src/api.ts`'s `apiPost` posts `/standards` with only
+  `Content-Type`. When `cmd/labor` runs with `DATABASE_URL` set, the route
+  is wrapped by `RequireIdempotencyKey` (ADR 0016) and answers
+  `400 idempotency-key-required`, so the remote's define-standard form only
+  works against the in-memory configuration.
+- **The analytics consumer's dedupe gate commits before the projection.**
+  `AnalyticsConsumer.HandleMessage` marks the CloudEvents `id` in
+  `analytics_consumed_events` in its own statement, then applies the
+  projection in a separate transaction. `ReadMessage` has already committed
+  the offset, so if the apply fails the error is logged and that event's
+  effect is never retried (ADR 0007 accepts the two idempotency layers but
+  does not discuss this ordering).
+
+The previous entry here — `fulfillment-execution`'s
 `TaskCompleted` payload not carrying a `task_type` field, leaving every
 consumed event bucketed as `""` (unclassified) — was closed by
 fulfillment-execution ADR-0023 (`task_type` added to the wire payload)
@@ -508,9 +550,9 @@ and have since been added, bringing this service to full fleet parity with
 - **Docker image publishing + release automation** (`docker-publish`,
   `release` CI jobs) — cosign keyless signing, SPDX SBOM attestation,
   auto-tagged GitHub releases, Helm chart published to
-  `oci://ghcr.io/claudioed`.
+  `oci://ghcr.io/iqvo`.
 - **Full Docusaurus documentation site**, live at
-  https://claudioed.github.io/labor-performance/.
+  https://iqvo.github.io/labor-performance/.
 - **`labor-mfe` micro-frontend remote** (`web/`) — see
   [Operator micro-frontend](#operator-micro-frontend-web) below.
 - **Per-service analytical data product** — analytics topic, analytical
@@ -540,6 +582,21 @@ and have since been added, bringing this service to full fleet parity with
 13. [0013 — Labor performance publishes an integration event](docs/docs/adr/0013-labor-performance-integration-events.md)
 14. [0014 — Measuring idleness and utilization](docs/docs/adr/0014-labor-utilization-idleness.md)
 15. [0015 — Optional travel-time component on a LaborStandard](docs/docs/adr/0015-optional-travel-component-on-labor-standard.md)
+16. [0016 — Transactional Idempotency-Key middleware for POST /standards](docs/docs/adr/0016-idempotency-key-middleware.md)
+17. [0017 — Kafka consumer dead-letter queue and graceful shutdown hardening](docs/docs/adr/0017-kafka-dlq-and-graceful-shutdown.md)
+18. [0018 — Key-aware Hash balancer on every outbound Kafka writer](docs/docs/adr/0018-kafka-writer-hash-balancer.md)
+19. [0019 — Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning](docs/docs/adr/0019-horizontal-autoscaling-and-pgxpool-tuning.md)
+20. [0020 — Run golang-migrate against a direct Postgres connection, not PgBouncer](docs/docs/adr/0020-migrations-direct-postgres-connection.md)
+21. [0021 — CloudEvents 1.0 as the mandatory event envelope](docs/docs/adr/0021-cloudevents-mandatory-event-envelope.md)
+22. [0022 — Optimistic concurrency and one open standard per task type on labor_standards](docs/docs/adr/0022-optimistic-concurrency-one-open-standard.md)
+23. [0023 — Housekeeping sweeper for idempotency keys and published outbox rows](docs/docs/adr/0023-housekeeping-sweeper.md)
+24. [0024 — labor-mfe: a chart-shipped, disabled-by-default frontend remote](docs/docs/adr/0024-labor-mfe-frontend-remote.md)
+25. [0025 — RFC 7807 Problem Details for every REST error](docs/docs/adr/0025-rfc7807-problem-details.md)
+26. [0026 — arch-go architecture fitness tests, enforced in CI](docs/docs/adr/0026-arch-go-fitness-suite.md)
+27. [0027 — Boot-time dial retry (bootretry) + Kubernetes startupProbe](docs/docs/adr/0027-bootretry-and-startup-probe.md)
+28. [0028 — Gateway API HTTPRoute, disabled by default, alongside Ingress](docs/docs/adr/0028-gateway-api-httproute.md)
+29. [0029 — Kafka writer durability: RequireAll acks + 10ms BatchTimeout](docs/docs/adr/0029-kafka-writer-durability.md)
+30. [0030 — MCP eval suite and governance gate, run as plain go test](docs/docs/adr/0030-mcp-eval-and-governance-gates.md)
 
 The same list, with statuses, is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
 

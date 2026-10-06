@@ -139,7 +139,7 @@ service's own `internal/adapters/inbound/http/server.go`
 `CORS_ALLOWED_ORIGINS` default, predating this remote's own existence.
 Keep the two in sync if either the remote's dev port or the backend's
 CORS default ever changes. CI's `web:` job runs the sequence above
-against a dual checkout (this repo + `claudioed/warehouse-ui-kit@develop`)
+against a dual checkout (this repo + `IQVO/warehouse-ui-kit@develop`)
 — reproduce that locally by symlinking or checking out
 `warehouse-ui-kit` as a real sibling if `npm ci` behaves differently
 than CI.
