@@ -439,8 +439,9 @@ lefthook install
 ```
 
 CI (`.github/workflows/ci.yml`) runs the full fleet-standard matrix:
-**`lint`**, **`test`**, **`bdd`**, **`integration`** (Postgres service
-container + testcontainers), **`mutation-fast`** (blocking,
+**`lint`**, **`test`**, **`bdd`**, **`integration`** (testcontainers boots
+its own Postgres/Kafka; a fitness test fails CI if a Postgres integration test
+reintroduces a `DATABASE_URL` skip gate), **`mutation-fast`** (blocking,
 `./internal/domain/performance`) and **`mutation`** (exhaustive,
 scheduled/manual, `./internal/domain`), **`api-lint`** (Spectral against
 `apis/openapi.yaml`, `apis/openapi-reports.yaml` and `apis/asyncapi.yaml`),

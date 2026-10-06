@@ -194,30 +194,14 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: labor
-          POSTGRES_PASSWORD: labor
-          POSTGRES_DB: labor
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
+    # No Postgres service container: every integration test boots its own
+    # Postgres (and Kafka) via testcontainers on the runner's Docker daemon.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - name: Integration tests
-        env:
-          DATABASE_URL: "postgres://labor:labor@localhost:5432/labor?sslmode=disable"
-        # consumer_integration_test.go starts an isolated Kafka Testcontainers
-        # broker, so this job executes the Kafka assertion without an external
-        # broker service alongside the Postgres-backed integration tests.
+      - name: Integration tests (testcontainers; each test boots its own Postgres/Kafka)
         run: go test -tags=integration ./... -race -count=1
 
   # Fast, BLOCKING mutation subset: runs on every push/PR so a drop in test
