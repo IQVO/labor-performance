@@ -76,7 +76,7 @@ sequenceDiagram
     participant MCP as labor-performance MCP server
     Sup->>AG: why is PICK slow right now
     AG->>MCP: qry: get_task_type_utilization taskType PICK windowSeconds 3600
-    MCP-->>AG: taskSeconds, idleSeconds, openGapSeconds, utilizationPct
+    MCP-->>AG: taskSeconds, idleSeconds, openGapSeconds always 0 at task-type scope, utilizationPct
     AG->>MCP: qry: get_task_type_performance taskType PICK
     MCP-->>AG: taskCount, meanEfficiencyPct, meanActualSeconds
     AG->>MCP: qry: get_labor_standard taskType PICK

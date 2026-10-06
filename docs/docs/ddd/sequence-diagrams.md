@@ -278,6 +278,8 @@ Source: `internal/application/usecases/get_utilization.go`,
 `ForTaskType` (REST `GET /task-types/{taskType}/utilization` and MCP
 `get_task_type_utilization`), which sums the same two repos per task type,
 adds `DistinctAssociatesByTaskType`, and computes no open gap.
+Decided 2026-10-06: that is by design — the open gap stays per associate
+(ADR 0014), so at task-type scope `openGapSeconds` is always 0.
 
 ## 6. Analytics projector and reports API
 
