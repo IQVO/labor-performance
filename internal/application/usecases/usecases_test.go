@@ -1106,6 +1106,39 @@ func TestGetUtilization_ForAssociate_OpenGap_IncludesStillRunningIdleTime(t *tes
 	}
 }
 
+// TestGetUtilization_ForTaskType_NeverReportsAnOpenGap pins the documented
+// scope of the open gap (ADR 0014): it is per associate. An associate who
+// is idle right now moves ForAssociate's OpenGapSeconds, but the task-type
+// result stays at 0 — the REST/MCP descriptions say so, and this keeps the
+// code and those descriptions from drifting apart again.
+func TestGetUtilization_ForTaskType_NeverReportsAnOpenGap(t *testing.T) {
+	f := newFixture(baseTime)
+	ctx := context.Background()
+
+	if _, err := f.recordTaskPerformance.Execute(ctx, usecases.RecordTaskPerformanceRequest{
+		KafkaEventId: "evt-1", TaskId: "task-1", AssociateId: "assoc-1", TaskType: shared.Pick,
+		ActualSeconds: 40, CompletedAt: baseTime,
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	f2 := newFixtureAt(f, baseTime.Add(90*time.Second))
+	byAssociate, err := f2.getUtilization.ForAssociate(ctx, "assoc-1", time.Hour)
+	if err != nil {
+		t.Fatalf("ForAssociate: %v", err)
+	}
+	if byAssociate.OpenGapSeconds != 90 {
+		t.Fatalf("precondition: ForAssociate OpenGapSeconds = %d, want 90 (assoc-1 is idle right now)", byAssociate.OpenGapSeconds)
+	}
+	byType, err := f2.getUtilization.ForTaskType(ctx, shared.Pick, time.Hour)
+	if err != nil {
+		t.Fatalf("ForTaskType: %v", err)
+	}
+	if byType.OpenGapSeconds != 0 {
+		t.Fatalf("ForTaskType OpenGapSeconds = %d, want 0 — the open gap is per associate only", byType.OpenGapSeconds)
+	}
+}
+
 // TestGetUtilization_ForAssociate_NoOpenGapWhenNotCurrentlyIdle proves an
 // associate with a closed (already-completed-and-followed) gap
 // contributes zero OpenGapSeconds — the open-gap computation must not

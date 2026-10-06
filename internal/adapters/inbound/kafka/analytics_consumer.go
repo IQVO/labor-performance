@@ -59,6 +59,34 @@ type analyticsData struct {
 	CompletedAt   time.Time `json:"completed_at"`
 }
 
+// UnitOfWork brackets the consumer's idempotency claim and the projection
+// apply in ONE transaction: Execute runs fn with a ctx that carries the
+// transaction, commits when fn returns nil and rolls everything back —
+// including the claim — when it returns an error. A failed apply therefore
+// leaves the event un-claimed, so the redelivery is applied rather than
+// short-circuited as a duplicate. The Postgres implementation lives in the
+// analyticsstore outbound adapter.
+type UnitOfWork interface {
+	Execute(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+// messageReader is the slice of *kafkago.Reader the consumer needs. The
+// consume loop uses FetchMessage + CommitMessages (never ReadMessage, which
+// auto-commits the offset before the handler has run).
+type messageReader interface {
+	FetchMessage(ctx context.Context) (kafkago.Message, error)
+	CommitMessages(ctx context.Context, msgs ...kafkago.Message) error
+	Close() error
+}
+
+const (
+	// defaultRetryInitial / defaultRetryMax bound the capped exponential
+	// backoff Run applies while retrying a message whose handler failed
+	// with a transient (infrastructure) error.
+	defaultRetryInitial = 200 * time.Millisecond
+	defaultRetryMax     = 5 * time.Second
+)
+
 // AnalyticsConsumer reads this service's own domain events off the
 // analytics topic and applies each to the report ProjectionStore, exactly
 // once per CloudEvents id.
@@ -69,23 +97,40 @@ type analyticsData struct {
 // service's own analytics topic. They share no state and run in separate
 // processes (cmd/labor and cmd/labor-projector).
 type AnalyticsConsumer struct {
-	Reader     *kafkago.Reader
+	Reader     messageReader
 	Projection report.ProjectionStore
 	Processed  ProcessedEvents
+	// UnitOfWork makes the Processed claim and the Projection apply one
+	// atomic step. Nil runs them back to back without a shared
+	// transaction, which is only correct for in-memory stores that cannot
+	// fail mid-apply.
+	UnitOfWork UnitOfWork
 	Logger     *slog.Logger
+
+	// retryInitial/retryMax tune the transient-failure backoff; zero
+	// values use the defaults (tests shrink them).
+	retryInitial time.Duration
+	retryMax     time.Duration
 }
 
 // NewAnalyticsConsumer constructs an AnalyticsConsumer reading the
 // analytics topic from brokers under AnalyticsConsumerGroup.
-func NewAnalyticsConsumer(brokers []string, projection report.ProjectionStore, processed ProcessedEvents, logger *slog.Logger) *AnalyticsConsumer {
+func NewAnalyticsConsumer(brokers []string, projection report.ProjectionStore, processed ProcessedEvents, uow UnitOfWork, logger *slog.Logger) *AnalyticsConsumer {
+	return NewAnalyticsConsumerForTopic(brokers, AnalyticsConsumerGroup, cloudevents.TopicLaborPerformanceAnalytics, projection, processed, uow, logger)
+}
+
+// NewAnalyticsConsumerForTopic is NewAnalyticsConsumer with an explicit
+// consumer group and topic, so integration tests can run against an
+// isolated topic.
+func NewAnalyticsConsumerForTopic(brokers []string, groupID, topic string, projection report.ProjectionStore, processed ProcessedEvents, uow UnitOfWork, logger *slog.Logger) *AnalyticsConsumer {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &AnalyticsConsumer{
 		Reader: kafkago.NewReader(kafkago.ReaderConfig{
 			Brokers: brokers,
-			Topic:   cloudevents.TopicLaborPerformanceAnalytics,
-			GroupID: AnalyticsConsumerGroup,
+			Topic:   topic,
+			GroupID: groupID,
 			// Start a brand-new consumer group at the EARLIEST offset.
 			// The projection is a replayable read model, not a live
 			// integration reaction: a fresh projector — or a backfill
@@ -99,6 +144,7 @@ func NewAnalyticsConsumer(brokers []string, projection report.ProjectionStore, p
 		}),
 		Projection: projection,
 		Processed:  processed,
+		UnitOfWork: uow,
 		Logger:     logger,
 	}
 }
@@ -108,21 +154,67 @@ func (c *AnalyticsConsumer) Close() error {
 	return c.Reader.Close()
 }
 
-// Run reads and handles messages until ctx is cancelled or the reader
-// returns a fatal error. A handling error is logged and the loop
-// continues, so one bad message cannot wedge the projector.
+// Run fetches and handles messages until ctx is cancelled or the reader
+// returns a fatal error. The offset is committed ONLY after the handler
+// returns nil (at-least-once): a handler error means a transient
+// infrastructure failure (the handler returns nil for deterministic bad
+// input), so the SAME message is retried with capped exponential backoff
+// rather than skipped. A commit failure is fatal to the loop; the
+// uncommitted offset is redelivered and the idempotency claim makes the
+// replay a no-op.
 func (c *AnalyticsConsumer) Run(ctx context.Context) error {
 	for {
-		msg, err := c.Reader.ReadMessage(ctx)
+		msg, err := c.Reader.FetchMessage(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return nil
 			}
 			return err
 		}
-		if err := c.Handle(ctx, msg); err != nil {
-			c.Logger.ErrorContext(ctx, "analytics message handling failed",
-				"topic", msg.Topic, "offset", msg.Offset, "error", err)
+		if err := c.handleWithRetry(ctx, msg); err != nil {
+			// Only a cancelled ctx ends the retry loop; leave the
+			// offset uncommitted so the message is redelivered.
+			return nil
+		}
+		if err := c.Reader.CommitMessages(ctx, msg); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("analytics: commit offset %d: %w", msg.Offset, err)
+		}
+	}
+}
+
+// handleWithRetry calls Handle until it succeeds, sleeping a capped
+// exponential backoff between attempts. It returns a non-nil error only
+// when ctx is cancelled.
+func (c *AnalyticsConsumer) handleWithRetry(ctx context.Context, msg kafkago.Message) error {
+	delay := c.retryInitial
+	if delay <= 0 {
+		delay = defaultRetryInitial
+	}
+	maxDelay := c.retryMax
+	if maxDelay <= 0 {
+		maxDelay = defaultRetryMax
+	}
+	for attempt := 1; ; attempt++ {
+		err := c.Handle(ctx, msg)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		c.logger().ErrorContext(ctx, "analytics message handling failed; retrying",
+			"topic", msg.Topic, "offset", msg.Offset, "attempt", attempt, "retry_in", delay, "error", err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
 		}
 	}
 }
@@ -155,10 +247,14 @@ func (c *AnalyticsConsumer) Handle(ctx context.Context, msg kafkago.Message) err
 //   - A type outside the projection contract is ignored and NOT marked
 //     processed, so widening the contract later can reprocess it on a
 //     replay.
-//   - A projecting event is deduped on the CloudEvents id BEFORE it is
-//     applied, so an at-least-once redelivery cannot double-count.
-//   - A malformed payload is an error (returned, logged by Run), not a
-//     silent skip — unlike an unknown type, which is expected.
+//   - A payload that cannot be decoded is deterministic bad input: it is
+//     logged at WARN and skipped (nil error) WITHOUT being marked
+//     processed. Returning an error here would make Run retry it forever.
+//   - A projecting event is claimed on the CloudEvents id and applied
+//     inside ONE UnitOfWork, so an at-least-once redelivery cannot
+//     double-count AND a failed apply rolls the claim back, letting the
+//     retry re-apply it. A non-nil return therefore always means a
+//     transient infrastructure failure.
 func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error {
 	evt, err := cloudevents.Decode(raw)
 	if err != nil {
@@ -180,20 +276,32 @@ func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error
 		return nil
 	}
 
-	isNew, err := c.Processed.MarkProcessed(ctx, evt.ID())
-	if err != nil {
-		return fmt.Errorf("analytics: mark processed: %w", err)
-	}
-	if !isNew {
+	var data analyticsData
+	if err := evt.DataAs(&data); err != nil {
+		c.logger().WarnContext(ctx, "skipping analytics event with undecodable data",
+			"topic", cloudevents.TopicLaborPerformanceAnalytics, "id", evt.ID(), "type", evt.Type(), "error", err)
 		return nil
 	}
 
-	var data analyticsData
-	if err := evt.DataAs(&data); err != nil {
-		return fmt.Errorf("analytics: decode data: %w", err)
-	}
+	return c.atomically(ctx, func(ctx context.Context) error {
+		isNew, err := c.Processed.MarkProcessed(ctx, evt.ID())
+		if err != nil {
+			return fmt.Errorf("analytics: mark processed: %w", err)
+		}
+		if !isNew {
+			return nil
+		}
+		return c.apply(ctx, evt, data)
+	})
+}
 
-	return c.apply(ctx, evt, data)
+// atomically runs fn inside the configured UnitOfWork, or directly when
+// none is configured.
+func (c *AnalyticsConsumer) atomically(ctx context.Context, fn func(ctx context.Context) error) error {
+	if c.UnitOfWork == nil {
+		return fn(ctx)
+	}
+	return c.UnitOfWork.Execute(ctx, fn)
 }
 
 // logger returns the configured logger, or slog.Default for a zero-value

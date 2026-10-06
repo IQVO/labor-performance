@@ -85,12 +85,7 @@ func run() error {
 	}
 	defer pool.Close()
 
-	consumer := inboundkafka.NewAnalyticsConsumer(
-		kafkaBrokers,
-		analyticsstore.NewPostgresProjection(pool),
-		analyticsstore.NewConsumedEventsRepo(pool),
-		logger,
-	)
+	consumer := newAnalyticsConsumer(kafkaBrokers, pool, logger)
 	defer func() {
 		if err := consumer.Close(); err != nil {
 			logger.Error("error closing analytics kafka consumer", "error", err)
@@ -132,6 +127,19 @@ func run() error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+// newAnalyticsConsumer wires the analytics consumer over pool: the claim
+// (ConsumedEventsRepo) and the projection share one analyticsstore.UnitOfWork
+// transaction so a failed apply rolls the claim back (ADR 0031).
+func newAnalyticsConsumer(brokers []string, pool *pgxpool.Pool, logger *slog.Logger) *inboundkafka.AnalyticsConsumer {
+	return inboundkafka.NewAnalyticsConsumer(
+		brokers,
+		analyticsstore.NewPostgresProjection(pool),
+		analyticsstore.NewConsumedEventsRepo(pool),
+		analyticsstore.NewUnitOfWork(pool),
+		logger,
+	)
 }
 
 // openAnalyticsPool runs the analytical migrations and opens a verified

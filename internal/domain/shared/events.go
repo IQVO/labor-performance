@@ -3,10 +3,13 @@ package shared
 import "time"
 
 // DomainEvent is a past-tense fact produced by an aggregate in this
-// domain. The outbound event publisher serializes and logs these; the
-// domain never depends on the publishing mechanism. Per CLAUDE.md, v1 ships
-// a log publisher only — no Kafka publish of these events is required
-// (they are not yet consumed by any other service).
+// domain. The outbound event publisher serializes these (as CloudEvents 1.0,
+// ADR 0021) and the domain never depends on the publishing mechanism. With
+// EVENT_PUBLISHER=kafka the events are fanned onto the analytics and
+// integration topics, through the transactional outbox when Postgres is
+// configured (ADR 0010, ADR 0013); the default log publisher only logs them.
+// TaskPerformanceRecorded on the integration topic is consumed by
+// workforce-management's event-fed labor-performance cache.
 type DomainEvent interface {
 	EventName() string
 	OccurredAt() time.Time

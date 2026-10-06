@@ -20,7 +20,21 @@ type recordingProjection struct {
 	defined   []appliedStandard
 	revised   []appliedStandard
 	failWith  error
+	failFirst int // fail this many calls with a transient error, then succeed
 	callCount int
+}
+
+// injectedFailure reports the error the current call must fail with, if
+// any. The caller has already incremented callCount.
+func (p *recordingProjection) injectedFailure() error {
+	if p.failWith != nil {
+		return p.failWith
+	}
+	if p.failFirst > 0 {
+		p.failFirst--
+		return errors.New("transient projection failure")
+	}
+	return nil
 }
 
 type appliedTask struct {
@@ -35,8 +49,8 @@ type appliedStandard struct {
 
 func (p *recordingProjection) ApplyTaskPerformanceRecorded(_ context.Context, eventId string, f report.TaskPerformanceFact) error {
 	p.callCount++
-	if p.failWith != nil {
-		return p.failWith
+	if err := p.injectedFailure(); err != nil {
+		return err
 	}
 	p.tasks = append(p.tasks, appliedTask{eventId, f})
 	return nil
@@ -44,8 +58,8 @@ func (p *recordingProjection) ApplyTaskPerformanceRecorded(_ context.Context, ev
 
 func (p *recordingProjection) ApplyLaborStandardDefined(_ context.Context, eventId string, f report.StandardFact) error {
 	p.callCount++
-	if p.failWith != nil {
-		return p.failWith
+	if err := p.injectedFailure(); err != nil {
+		return err
 	}
 	p.defined = append(p.defined, appliedStandard{eventId, f})
 	return nil
@@ -53,8 +67,8 @@ func (p *recordingProjection) ApplyLaborStandardDefined(_ context.Context, event
 
 func (p *recordingProjection) ApplyLaborStandardRevised(_ context.Context, eventId string, f report.StandardFact) error {
 	p.callCount++
-	if p.failWith != nil {
-		return p.failWith
+	if err := p.injectedFailure(); err != nil {
+		return err
 	}
 	p.revised = append(p.revised, appliedStandard{eventId, f})
 	return nil
@@ -81,11 +95,36 @@ func (f *fakeProcessedEvents) MarkProcessed(_ context.Context, eventId string) (
 	return true, nil
 }
 
+// fakeUnitOfWork is a transactional stand-in: when fn fails, every claim
+// the gate recorded during it is rolled back, exactly as the Postgres
+// UnitOfWork rolls back analytics_consumed_events.
+type fakeUnitOfWork struct {
+	gate *fakeProcessedEvents
+}
+
+func (u *fakeUnitOfWork) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
+	snapshot := make(map[string]struct{}, len(u.gate.seen))
+	for k := range u.gate.seen {
+		snapshot[k] = struct{}{}
+	}
+	if err := fn(ctx); err != nil {
+		u.gate.seen = snapshot
+		return err
+	}
+	return nil
+}
+
 // newTestAnalyticsConsumer builds a consumer with no Kafka reader at all:
 // every test here drives HandleMessage directly, so no broker (and no
 // fake reader) is needed.
 func newTestAnalyticsConsumer(p report.ProjectionStore, gate ProcessedEvents) *AnalyticsConsumer {
 	return &AnalyticsConsumer{Projection: p, Processed: gate}
+}
+
+// newAtomicTestConsumer is newTestAnalyticsConsumer wired with the
+// transactional fakeUnitOfWork over gate.
+func newAtomicTestConsumer(p report.ProjectionStore, gate *fakeProcessedEvents) *AnalyticsConsumer {
+	return &AnalyticsConsumer{Projection: p, Processed: gate, UnitOfWork: &fakeUnitOfWork{gate: gate}}
 }
 
 // analyticsMessage builds a raw CloudEvents 1.0 analytics message with
@@ -287,13 +326,21 @@ func TestAnalyticsConsumerSkipsUnknownEventTypes(t *testing.T) {
 func TestAnalyticsConsumerErrors(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("a malformed data payload is an error", func(t *testing.T) {
-		c := newTestAnalyticsConsumer(&recordingProjection{}, newFakeProcessedEvents())
+	t.Run("a malformed data payload is skipped, not retried and not claimed", func(t *testing.T) {
+		gate := newFakeProcessedEvents()
+		proj := &recordingProjection{}
+		c := newAtomicTestConsumer(proj, gate)
 		raw := rawCloudEvent(t, "evt-1", cloudevents.TypeTaskPerformanceRecorded, "assoc-1",
 			"urn:warehouse:labor-performance:analytics:TaskPerformanceRecorded:v1", ts(9, 0),
 			json.RawMessage(`{"actual_seconds":"not-a-number"}`))
-		if err := c.HandleMessage(ctx, raw); err == nil {
-			t.Fatal("want an error for a malformed data payload")
+		// Deterministic bad input must return nil: a non-nil error means
+		// "transient, retry the same message", which would wedge the
+		// partition behind a payload that can never decode.
+		if err := c.HandleMessage(ctx, raw); err != nil {
+			t.Fatalf("a malformed payload must be skipped with a nil error, got %v", err)
+		}
+		if proj.callCount != 0 || len(gate.seen) != 0 {
+			t.Errorf("malformed payload was applied (%d calls) or claimed (%v)", proj.callCount, gate.seen)
 		}
 	})
 
