@@ -486,12 +486,6 @@ auto-tagged GitHub release + published Helm chart). Plus
 Found while refreshing these docs against the code on `develop`
 (reported, not fixed here — they are code changes):
 
-- **The `labor_mfe` remote does not send `Idempotency-Key`.**
-  `web/src/api.ts`'s `apiPost` posts `/standards` with only
-  `Content-Type`. When `cmd/labor` runs with `DATABASE_URL` set, the route
-  is wrapped by `RequireIdempotencyKey` (ADR 0016) and answers
-  `400 idempotency-key-required`, so the remote's define-standard form only
-  works against the in-memory configuration.
 - **The analytics consumer's dedupe gate commits before the projection.**
   `AnalyticsConsumer.HandleMessage` marks the CloudEvents `id` in
   `analytics_consumed_events` in its own statement, then applies the

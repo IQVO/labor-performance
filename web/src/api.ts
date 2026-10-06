@@ -48,7 +48,12 @@ export async function apiPost<TResponse>(
 ): Promise<TResponse> {
   const res = await fetch(`${LABOR_API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      // POST /standards is wrapped by RequireIdempotencyKey (ADR 0016) when
+      // the service runs with Postgres; one fresh key per submission.
+      "Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify(body),
   });
   if (!res.ok) await parseProblemOrThrow(res);
