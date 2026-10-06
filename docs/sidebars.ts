@@ -8,8 +8,9 @@ import apiReportsSidebar from './docs/api-reference/rest-reports/sidebar';
 
 /**
  * Top-level categories mirror the shape shared across warehouse-systems
- * documentation sites: Overview, Business Context, Domain-Driven Design,
- * API Reference, API Reference (Reports), Ecosystem, MCP governance,
+ * documentation sites: Overview, Business Context, Domain-Driven Design
+ * (plus the ddd-crew artifact pack), API Reference, API Reference
+ * (Reports), Ecosystem, MCP governance,
  * Architecture Decision Records.
  */
 const sidebars: SidebarsConfig = {
@@ -17,6 +18,23 @@ const sidebars: SidebarsConfig = {
     'overview',
     'business-context/domain-vision',
     'ddd/subdomain-classification',
+    {
+      type: 'category',
+      label: 'DDD artifacts (ddd-crew)',
+      link: {type: 'doc', id: 'ddd/ddd-artifacts'},
+      items: [
+        'ddd/core-domain-chart',
+        'ddd/bounded-context-canvas',
+        'ddd/aggregate-design-canvas',
+        'ddd/domain-message-flow',
+        'ddd/eventstorming',
+        'ddd/ubiquitous-language',
+        'ddd/class-diagram',
+        'ddd/entity-relationship',
+        'ddd/sequence-diagrams',
+        'ddd/domain-events',
+      ],
+    },
     {
       type: 'category',
       label: 'API Reference',
@@ -66,6 +84,7 @@ const sidebars: SidebarsConfig = {
         'adr/0028-gateway-api-httproute',
         'adr/0029-kafka-writer-durability',
         'adr/0030-mcp-eval-and-governance-gates',
+        'adr/0031-analytics-consumer-atomic-claim-and-retry',
       ],
     },
   ],

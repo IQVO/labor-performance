@@ -70,6 +70,29 @@ for the full reasoning.
   [ADR 0003](/docs/adr/0003-kafka-choreography-consumer-of-fulfillment-execution)
   and [ADR 0015](/docs/adr/0015-optional-travel-component-on-labor-standard).
 
+## What runs today
+
+The code on `develop` ships four Go binaries plus one frontend remote:
+
+| Process | Port (default) | What it does |
+| --- | --- | --- |
+| `cmd/labor` | `:8080` (`HTTP_ADDR`) | The OLTP service: REST API (`POST /standards`, `GET /standards/{taskType}`, scorecard, task-type performance, two utilization reads, `/healthz`, `/readyz`), the Kafka consumer of `warehouse.fulfillment.events` (group `labor-performance`, DLQ `warehouse.fulfillment.events.dlq`), the transactional-outbox relay and the housekeeping sweeper. |
+| `cmd/mcp` | `:8090` (`MCP_ADDR`) | MCP server over Streamable HTTP: four read-only tools, the `scorecard://labor/{associateId}` resource template and the `review_associate_performance` prompt. No write tool. |
+| `cmd/labor-projector` | `:8091` (`ADMIN_ADDR`, `/healthz` only) | The only writer of the analytical database: consumes `warehouse.labor-performance.analytics` (group `labor-performance-analytics`, from the earliest offset) into `labor_performance_rollup`. |
+| `cmd/labor-reports` | `:8092` (`HTTP_ADDR`) | Read-only reports API: `GET /reports/performance`, `GET /reports/performance/freshness`, `GET /healthz`. |
+| `web/` (`labor_mfe`) | — | Module Federation remote, mounted by `warehouse-console`; calls this service's own OLTP API only. |
+
+Every write either comes from the Kafka consumer (`RecordTaskPerformance`)
+or from `POST /standards` (`DefineStandard`). With `DATABASE_URL` and
+`EVENT_PUBLISHER=kafka` set, both commit their domain event into
+`outbox_events` in the same transaction, and the relay publishes
+CloudEvents 1.0 (structured mode) to `warehouse.labor-performance.analytics`
+and — for `TaskPerformanceRecorded` only — `warehouse.labor-performance.events`.
+No REST, reports or MCP surface is authenticated (ADR 0012).
+
+The [DDD artifact pack](/docs/ddd/ddd-artifacts) documents all of this as
+ddd-crew canvases plus class, ER and sequence diagrams derived from the code.
+
 ## How it fits the fleet
 
 ```mermaid
@@ -102,6 +125,9 @@ relationship analysis.
   service exists in this shape.
 - **[Subdomain classification](/docs/ddd/subdomain-classification)** —
   Supporting subdomain, the aggregates and invariants.
+- **[DDD artifacts (ddd-crew)](/docs/ddd/ddd-artifacts)** — core domain
+  chart, bounded context canvas, aggregate design canvas, EventStorming,
+  domain message flows, glossary, class/ER/sequence diagrams, domain events.
 - **[Context map](/docs/ecosystem/context-map)** — every relationship
   this service has, and why none of them is an outbound call.
 - **[API Reference](/docs/api-reference/rest/labor-performance-api)** — generated from the real,

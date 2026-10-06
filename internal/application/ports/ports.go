@@ -161,8 +161,12 @@ type IdlePeriodRepo interface {
 	DistinctAssociatesByTaskType(ctx context.Context, taskType shared.TaskType, since time.Time) (int, error)
 }
 
-// EventPublisher publishes domain events raised by aggregates. v1 ships a
-// log publisher only — see CLAUDE.md's "Domain events" section.
+// EventPublisher publishes domain events raised by aggregates. The default
+// adapter is a log publisher; with EVENT_PUBLISHER=kafka events are fanned
+// onto the analytics and integration topics — through the transactional
+// outbox when Postgres is configured (ADR 0010, ADR 0013), otherwise
+// straight to the broker. The integration topic already has a consumer
+// (workforce-management's labor-performance cache).
 type EventPublisher interface {
 	Publish(ctx context.Context, events ...shared.DomainEvent) error
 }

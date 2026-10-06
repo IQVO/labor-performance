@@ -20,6 +20,27 @@ describe("apiPost", () => {
     expect(result).toEqual({ taskType: "PICK", expectedSeconds: 45 });
   });
 
+  it("sends a fresh UUID Idempotency-Key header on every call", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({}),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await apiPost("/standards", { taskType: "PICK", expectedSeconds: 45 });
+    await apiPost("/standards", { taskType: "PICK", expectedSeconds: 45 });
+
+    const keys = fetchMock.mock.calls.map(
+      ([, init]) => (init as RequestInit).headers as Record<string, string>,
+    );
+    const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    expect(keys[0]["Idempotency-Key"]).toMatch(uuid);
+    expect(keys[1]["Idempotency-Key"]).toMatch(uuid);
+    expect(keys[0]["Idempotency-Key"]).not.toBe(keys[1]["Idempotency-Key"]);
+    expect(keys[0]["Content-Type"]).toBe("application/json");
+  });
+
   it("throws ApiError with the parsed RFC 7807 problem detail on failure", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,

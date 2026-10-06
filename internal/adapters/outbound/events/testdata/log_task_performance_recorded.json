@@ -1,0 +1,1 @@
+{"eventName":"TaskPerformanceRecorded","occurredAt":"2026-09-05T11:00:00Z","TaskId":"task-1","AssociateId":"assoc-1","TaskType":"PICK","ActualSeconds":52,"EfficiencyPct":86.5,"IdleSecondsBefore":12,"CompletedAt":"2026-09-05T09:00:00Z"}

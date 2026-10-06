@@ -14,7 +14,7 @@ read-only analytical database, with its own REST surface. That surface is
 documented in a SEPARATE spec from the OLTP API:
 
 - `apis/openapi.yaml` — the OLTP API (`cmd/labor`, port 8080): 6
-  endpoints plus `/healthz` — standards, performance and utilization reads. Spectral-linted in CI
+  endpoints plus `/healthz` and `/readyz` — standards, performance and utilization reads. Spectral-linted in CI
   (`api-lint` job) against `.spectral.yaml`.
 - `apis/openapi-reports.yaml` — the reports API (`cmd/labor-reports`, port
   8092): `GET /reports/performance`, `GET /reports/performance/freshness`,
@@ -76,6 +76,10 @@ AsyncAPI contract is instead described narratively in:
   full CloudEvents example, and the outbound integration topic)
 - `docs/docs/ddd/subdomain-classification.md` (domain events and where
   they are published)
+- the DDD artifact pack under `docs/docs/ddd/` — above all
+  `domain-events.md` (every type, topic, key and payload field),
+  `bounded-context-canvas.md` (message tables),
+  `domain-message-flow.md`, `eventstorming.md` and `sequence-diagrams.md`
 - `docs/docs/adr/0007-analytical-data-product.md`,
   `docs/docs/adr/0010-transactional-outbox.md`,
   `docs/docs/adr/0013-labor-performance-integration-events.md`,
@@ -121,7 +125,7 @@ is a documented, accepted gap, not something to keep re-attempting.
 
 ## `docs.yml` trigger branch vs. the Pages environment's allowed branches
 
-`gh api repos/claudioed/labor-performance/environments/github-pages/
+`gh api repos/IQVO/labor-performance/environments/github-pages/
 deployment-branch-policies` shows **both `develop` and `main`** are
 allowed to deploy to the `github-pages` environment. But
 `.github/workflows/docs.yml`'s `on.push.branches` is `[main]` only — a

@@ -4,6 +4,7 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 	"github.com/claudioed/labor-performance/internal/domain/standard"
+	"github.com/claudioed/labor-performance/internal/pgtx"
 )
 
 func TestPostgres_StandardRoundTrip(t *testing.T) {
@@ -244,6 +246,55 @@ func TestStandardRepo_OneOpenStandardPerTaskType(t *testing.T) {
 	}
 	if err := repo.Save(ctx, mustStandard(t, "std-open-4", shared.Pick, 55, from.Add(2*time.Hour))); err != nil {
 		t.Fatalf("expected a new open standard after the prior one closed, got %v", err)
+	}
+}
+
+// A 23505 on the one-open-standard index must not poison a surrounding
+// transaction: when the repo runs inside a ctx-carried tx (the
+// idempotency middleware's, or a UnitOfWork's) the failed INSERT is
+// confined to a savepoint, so the caller can keep using the same tx.
+func TestStandardRepo_OpenStandardConflict_LeavesSurroundingTxUsable(t *testing.T) {
+	pool := testDB(t)
+	repo := postgres.NewStandardRepo(pool)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	txCtx := pgtx.WithTx(ctx, tx)
+
+	from := time.Now().UTC().Truncate(time.Microsecond)
+	if err := repo.Save(txCtx, mustStandard(t, "std-sp-1", shared.Pick, 45, from)); err != nil {
+		t.Fatalf("seed open standard: %v", err)
+	}
+	if err := repo.Save(txCtx, mustStandard(t, "std-sp-2", shared.Pick, 50, from)); !errors.Is(err, ports.ErrOpenStandardConflict) {
+		t.Fatalf("second open standard = %v, want ErrOpenStandardConflict", err)
+	}
+
+	// Before the fix the tx is now aborted (SQLSTATE 25P02) and this fails.
+	var one int
+	if err := tx.QueryRow(ctx, "SELECT 1").Scan(&one); err != nil {
+		t.Fatalf("the surrounding transaction is unusable after the conflict: %v", err)
+	}
+	// ...and the work done before the conflict is still part of the tx.
+	got, err := repo.FindCurrentlyActive(txCtx, shared.Pick)
+	if err != nil || got == nil || got.ID() != "std-sp-1" {
+		t.Fatalf("FindCurrentlyActive after the conflict = %v, %v; want std-sp-1", got, err)
+	}
+	// A guarded-update conflict (ErrConcurrentModification) is not an SQL
+	// error and must leave the tx usable too.
+	stale := mustStandard(t, "std-sp-1", shared.Pick, 45, from) // version 1, row is still version 1
+	stale.Close(from.Add(time.Hour))
+	if err := repo.Save(txCtx, stale); err != nil {
+		t.Fatalf("close in tx: %v", err)
+	}
+	if err := repo.Save(txCtx, stale); !errors.Is(err, ports.ErrConcurrentModification) {
+		t.Fatalf("re-saving a stale version = %v, want ErrConcurrentModification", err)
+	}
+	if err := tx.QueryRow(ctx, "SELECT 1").Scan(&one); err != nil {
+		t.Fatalf("tx unusable after a version conflict: %v", err)
 	}
 }
 

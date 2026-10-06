@@ -88,6 +88,7 @@ Typos, broken links and formatting are of course fair game.
 | [0028](./0028-gateway-api-httproute.md) | Gateway API HTTPRoute, disabled by default, alongside Ingress | Accepted |
 | [0029](./0029-kafka-writer-durability.md) | Kafka writer durability: RequireAll acks + 10ms BatchTimeout | Accepted |
 | [0030](./0030-mcp-eval-and-governance-gates.md) | MCP eval suite and governance gate, run as plain go test | Accepted |
+| [0031](./0031-analytics-consumer-atomic-claim-and-retry.md) | Analytics consumer: atomic claim + apply, commit after success, retry transient failures | Accepted |
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.

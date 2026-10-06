@@ -146,7 +146,7 @@ func (d Deps) registerTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "get_task_type_utilization",
-		Description: "Return idleness/utilization for one task type over a trailing window: measured task time, measured idle time (between-task waits), the still-running open gap for anyone currently idle, and a derived utilization percent. Use it to answer 'how idle vs. busy has this task type been' questions -- e.g. distinguishing a genuinely understaffed task type from one with a stuck/lease-churn problem. utilizationPct is null when nothing was observed in the window; never treat null as 0%.",
+		Description: "Return idleness/utilization for one task type over a trailing window: measured task time, measured idle time (recorded between-task waits that already ended), and a derived utilization percent. openGapSeconds is always 0 for a task type: the still-running open gap of someone idle right now is computed per associate only (GET /associates/{associateId}/utilization), so a task-type result can understate idleness by whatever gap is still open. Use it to answer 'how idle vs. busy has this task type been' questions -- e.g. distinguishing a genuinely understaffed task type from one with a stuck/lease-churn problem. utilizationPct is null when nothing was observed in the window; never treat null as 0%.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, d.getTaskTypeUtilization)
 }

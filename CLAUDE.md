@@ -1,7 +1,8 @@
 # Project: Labor Performance (Supporting Bounded Context)
 Engineered labor standards ("a PICK should take 45s") and actual-vs-standard
 performance scoring for the `warehouse-systems` fleet (Go 1.26, module
-`github.com/claudioed/labor-performance`). Docs: https://claudioed.github.io/labor-performance/
+`github.com/claudioed/labor-performance`). Docs: https://iqvo.github.io/labor-performance/
+(DDD artifact pack: `docs/docs/ddd/ddd-artifacts.md`)
 
 > **Study project.** Educational DDD exercise using real industry patterns
 > (WMS/WES, CloudEvents 1.0, RFC 7807, hexagonal). Not a production system;
