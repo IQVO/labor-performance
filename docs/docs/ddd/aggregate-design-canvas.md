@@ -200,6 +200,12 @@ One associate's wait between finishing a task (`startedAt` = previous
 whether the cap applied (ADR 0014). An open gap (idle right now) is
 computed at read time and never persisted.
 
+Decided 2026-10-06: the open gap is an Associate-level concept and stays
+per associate. `GetUtilization.ForAssociate` computes it;
+`GetUtilization.ForTaskType` reports `openGapSeconds` as 0 by design,
+because attributing a still-running gap to a task type would invent
+semantics (the gap only gets a `taskType` when the next task ends it).
+
 ### 3. State Transitions
 
 ```mermaid

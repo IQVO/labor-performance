@@ -105,7 +105,7 @@ the outbox relay (infrastructure, not domain).
 | labor-performance projector | External System (own process) | analytics topic `warehouse.labor-performance.analytics` (`analytics_publisher.go`) |
 | Scorecard | Read Model | `ports.Scorecard`, `GetAssociateScorecard` |
 | TaskTypePerformance | Read Model | `ports.TaskTypePerformance`, `GetTaskTypePerformance` |
-| Utilization | Read Model | `usecases.UtilizationResult`, `GetUtilization` |
+| Utilization | Read Model | `usecases.UtilizationResult`, `GetUtilization`. Decided 2026-10-06: open gap stays per associate (ADR 0014); at task-type scope `openGapSeconds` is always 0 by design — not a hotspot |
 | Unknown task types never scored | Hotspot | `shared.ParseTaskTypeLenient` doc comment (REBIN) |
 | Idle cap is a judgment call | Hotspot | ADR 0014 "Negative / accepted"; `defaultIdleGapCapSeconds = 3600` |
 | DLQ has no consumer | Hotspot | `dlqTopicSuffix = ".dlq"` in `consumer.go`; no reader of that topic exists in the repo |

@@ -116,7 +116,9 @@ task's claim instant (`CompletedAt − ActualSeconds`).
 - Capped at `IDLE_GAP_CAP_SECONDS` (default 3600) inside the constructor;
   a clipped gap is stored with `Capped: true`.
 - A still-running **open gap** (an associate idle right now) is computed
-  at read time only and never persisted.
+  at read time only and never persisted. Decided 2026-10-06: it is
+  reported per associate only; at task-type scope `openGapSeconds` is
+  always 0 by design.
 
 ## Ubiquitous language
 

@@ -115,6 +115,12 @@ Top terms:
   flag is a signal for a human, never an action.
 - `TaskPerformance` is written only by the Kafka consumer; there is no
   REST write for it (CLAUDE.md non-negotiable 4).
+- Decided 2026-10-06: the **open gap** stays per associate (ADR 0014).
+  `GetUtilization.ForTaskType` reports `openGapSeconds: 0` by design and
+  says so in the OpenAPI description. An idle gap belongs to an
+  Associate; until that associate's next claim ends it, it has no task
+  type, so attributing it to one would invent semantics. No code or
+  contract change.
 
 ## Assumptions
 
@@ -149,3 +155,6 @@ Top terms:
 - `warehouse.fulfillment.events.dlq` has no consumer or replay tooling.
 - Utilization for robot stations is out of scope (no associate, no idle
   gap) — is that a gap someone needs filled?
+- Resolved, decided 2026-10-06: the open gap stays per associate (ADR
+  0014); at task-type scope `openGapSeconds` is always 0 by design, so
+  this is no longer an open question.
