@@ -45,11 +45,9 @@ readers can no longer map code to domain conversation.
 5. **A cross-aggregate rule implemented as a cross-aggregate call instead
    of an explicit local check, or vice versa**, per whatever this repo's
    own domain-model doc says about which invariants are local vs. which
-   legitimately need external state (e.g. this repo's DOT segregation
-   check is explicitly documented as "purely LOCAL... no cross-context
-   call" — a change that quietly makes it call out to another service
-   would be a real regression worth flagging even if functionally it
-   still "works").
+   legitimately need external state — a change that quietly turns a documented
+   local check into a call to another service is a real regression worth
+   flagging even if functionally it still "works".
 6. **New terminology introduced without updating the domain-model doc.**
    If new code introduces a genuinely new domain concept the doc doesn't
    yet name, that's not necessarily wrong — but the doc needs a new entry
