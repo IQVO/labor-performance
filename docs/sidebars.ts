@@ -18,8 +18,8 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Overview',
-      link: {type: 'doc', id: 'overview/introduction'},
-      items: ['overview/introduction', 'overview/architecture', 'overview/quickstart'],
+      link: {type: 'doc', id: 'overview'},
+      items: ['overview', 'overview/architecture', 'overview/quickstart'],
     },
     {
       type: 'category',
