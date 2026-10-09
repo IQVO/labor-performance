@@ -1,6 +1,6 @@
 module github.com/claudioed/labor-performance
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/arch-go/arch-go v1.7.0
