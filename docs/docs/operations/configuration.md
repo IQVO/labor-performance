@@ -140,6 +140,6 @@ To make the sweep effectively a no-op, set a very large duration such as
 | Sweeper DELETE batch | 1000 rows | `internal/adapters/outbound/postgres/sweeper.go` |
 | Metric export interval | 30s | `internal/adapters/outbound/telemetry/telemetry.go` |
 | Graceful shutdown budget | 10s (HTTP drain, relay, consumer), 5s for the telemetry flush | `cmd/*/main.go` |
-| Utilization default window | 1h (REST `?window=` absent or unparsable, MCP `windowSeconds` <= 0) | `internal/application/usecases/get_utilization.go` |
+| Utilization default window | 1h (REST `?window=` absent or unparsable, MCP `windowSeconds` ≤ 0) | `internal/application/usecases/get_utilization.go` |
 
 See [Runbook](./runbook.md) for how these values behave in a deployment.
