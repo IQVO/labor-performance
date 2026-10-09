@@ -8,16 +8,37 @@ import apiReportsSidebar from './docs/api-reference/rest-reports/sidebar';
 
 /**
  * Top-level categories mirror the shape shared across warehouse-systems
- * documentation sites: Overview, Business Context, Domain-Driven Design
- * (plus the ddd-crew artifact pack), API Reference, API Reference
- * (Reports), Ecosystem, MCP governance,
- * Architecture Decision Records.
+ * documentation sites: Overview, Operations, Development, Business
+ * Context, Domain-Driven Design (plus the ddd-crew artifact pack), API
+ * Reference, API Reference (Reports), Ecosystem, MCP, Architecture
+ * Decision Records.
  */
 const sidebars: SidebarsConfig = {
   docsSidebar: [
-    'overview',
+    {
+      type: 'category',
+      label: 'Overview',
+      link: {type: 'doc', id: 'overview/introduction'},
+      items: ['overview/introduction', 'overview/architecture', 'overview/quickstart'],
+    },
+    {
+      type: 'category',
+      label: 'Operations',
+      items: [
+        'operations/configuration',
+        'operations/runbook',
+        'operations/observability',
+        'operations/troubleshooting',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Development',
+      items: ['development/testing'],
+    },
     'business-context/domain-vision',
     'ddd/subdomain-classification',
+    'ddd/use-cases',
     {
       type: 'category',
       label: 'DDD artifacts (ddd-crew)',
@@ -47,8 +68,16 @@ const sidebars: SidebarsConfig = {
       link: {type: 'doc', id: 'api-reference/rest-reports/labor-performance-reports-api'},
       items: [...apiReportsSidebar],
     },
-    'ecosystem/context-map',
-    'mcp/governance-charter',
+    {
+      type: 'category',
+      label: 'Ecosystem',
+      items: ['ecosystem/context-map', 'ecosystem/integration'],
+    },
+    {
+      type: 'category',
+      label: 'MCP',
+      items: ['mcp/tools', 'mcp/governance-charter'],
+    },
     {
       type: 'category',
       label: 'Architecture Decision Records',

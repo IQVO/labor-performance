@@ -60,17 +60,17 @@ Typos, broken links and formatting are of course fair game.
 | --- | --- | --- |
 | [0001](./0001-hexagonal-ports-and-adapters.md) | Hexagonal (ports & adapters) architecture | Accepted |
 | [0002](./0002-new-bounded-context-not-extension-of-workforce-or-fulfillment.md) | A new bounded context, not an extension of workforce-management or fulfillment-execution | Accepted |
-| [0003](./0003-kafka-choreography-consumer-of-fulfillment-execution.md) | Kafka choreography consumer of fulfillment-execution, no REST dependency | Accepted; envelope superseded by 0021 |
+| [0003](./0003-kafka-choreography-consumer-of-fulfillment-execution.md) | Kafka choreography consumer of fulfillment-execution, no REST dependency | Accepted |
 | [0004](./0004-standard-frozen-at-completion-time-not-recomputed.md) | StandardSecondsAtCompletion is frozen at ingestion time, never recomputed | Accepted |
 | [0005](./0005-associate-trend-and-coaching-flag.md) | Associate Trend and CoachingFlag on the Scorecard read model | Accepted |
 | [0006](./0006-mean-actual-seconds-independent-of-standard.md) | MeanActualSeconds on TaskTypePerformance, independent of any standard | Accepted |
-| [0007](./0007-analytical-data-product.md) | Analytical data product | Accepted; envelope superseded by 0021 |
+| [0007](./0007-analytical-data-product.md) | Per-service analytical data product (the "Labor Performance Report") | Accepted |
 | [0008](./0008-standard-metrics-convention.md) | Standard metrics convention across the fleet | Accepted |
 | [0009](./0009-mcp-inbound-adapter.md) | Model Context Protocol as an inbound adapter, not a new service | Accepted — auth/scope sections superseded by 0012 |
-| [0010](./0010-transactional-outbox.md) | Transactional outbox for the analytics topic | Accepted; envelope superseded by 0021 |
+| [0010](./0010-transactional-outbox.md) | Transactional outbox for the analytics topic | Accepted |
 | [0011](./0011-rest-auth-static-bearer-scopes.md) | REST identity — fleet-standard static bearer keys with read/read-write scopes | Superseded by 0012 |
 | [0012](./0012-remove-rest-auth-layer.md) | Remove the REST/MCP identity layer | Accepted |
-| [0013](./0013-labor-performance-integration-events.md) | Labor performance publishes an integration event | Accepted; envelope superseded by 0021 |
+| [0013](./0013-labor-performance-integration-events.md) | Labor performance publishes an integration event | Accepted |
 | [0014](./0014-labor-utilization-idleness.md) | Measuring idleness and utilization | Accepted |
 | [0015](./0015-optional-travel-component-on-labor-standard.md) | Optional travel-time component on a LaborStandard | Accepted |
 | [0016](./0016-idempotency-key-middleware.md) | Transactional Idempotency-Key middleware for POST /standards | Accepted |
@@ -79,7 +79,7 @@ Typos, broken links and formatting are of course fair game.
 | [0019](./0019-horizontal-autoscaling-and-pgxpool-tuning.md) | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted |
 | [0020](./0020-migrations-direct-postgres-connection.md) | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted |
 | [0021](./0021-cloudevents-mandatory-event-envelope.md) | CloudEvents 1.0 as the mandatory event envelope | Accepted |
-| [0022](./0022-optimistic-concurrency-one-open-standard.md) | Optimistic concurrency (version column) and one open standard per task type on labor_standards | Accepted |
+| [0022](./0022-optimistic-concurrency-one-open-standard.md) | Optimistic concurrency and one open standard per task type on labor_standards | Accepted |
 | [0023](./0023-housekeeping-sweeper.md) | Housekeeping sweeper for idempotency keys and published outbox rows | Accepted |
 | [0024](./0024-labor-mfe-frontend-remote.md) | labor-mfe: a chart-shipped, disabled-by-default frontend remote | Accepted |
 | [0025](./0025-rfc7807-problem-details.md) | RFC 7807 Problem Details for every REST error | Accepted |
@@ -89,6 +89,17 @@ Typos, broken links and formatting are of course fair game.
 | [0029](./0029-kafka-writer-durability.md) | Kafka writer durability: RequireAll acks + 10ms BatchTimeout | Accepted |
 | [0030](./0030-mcp-eval-and-governance-gates.md) | MCP eval suite and governance gate, run as plain go test | Accepted |
 | [0031](./0031-analytics-consumer-atomic-claim-and-retry.md) | Analytics consumer: atomic claim + apply, commit after success, retry transient failures | Accepted |
+
+The Status column repeats each record's own `## Status` section. Four
+records whose bodies say plain **Accepted** have since been partly
+overtaken. The Kafka envelope described in
+[0003](./0003-kafka-choreography-consumer-of-fulfillment-execution.md),
+[0007](./0007-analytical-data-product.md),
+[0010](./0010-transactional-outbox.md) and
+[0013](./0013-labor-performance-integration-events.md) was replaced by
+the CloudEvents 1.0 envelope of
+[0021](./0021-cloudevents-mandatory-event-envelope.md). Their other
+decisions still stand.
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.
