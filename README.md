@@ -26,7 +26,7 @@ Published at https://iqvo.github.io/labor-performance/ (sources under
 
 | Area | Pages |
 | --- | --- |
-| Overview | [Introduction](docs/docs/overview.md) · [Architecture](docs/docs/overview/architecture.md) · [Quickstart](docs/docs/overview/quickstart.md) |
+| Overview | [Introduction](docs/docs/overview/introduction.md) · [Architecture](docs/docs/overview/architecture.md) · [Quickstart](docs/docs/overview/quickstart.md) |
 | Operations | [Configuration](docs/docs/operations/configuration.md) · [Runbook](docs/docs/operations/runbook.md) · [Observability](docs/docs/operations/observability.md) · [Troubleshooting](docs/docs/operations/troubleshooting.md) |
 | Development | [Testing](docs/docs/development/testing.md) |
 | Domain | [Domain vision](docs/docs/business-context/domain-vision.md) · [Subdomain classification](docs/docs/ddd/subdomain-classification.md) · [Use cases](docs/docs/ddd/use-cases.md) · [DDD artifacts](docs/docs/ddd/ddd-artifacts.md) |
