@@ -84,7 +84,7 @@ adapter layer. In `internal/adapters/outbound/kafka/`:
   specs.** Unlike `apis/openapi.yaml`/`apis/openapi-reports.yaml` (which
   DO have `docusaurus-plugin-openapi-docs` wiring and a `gen-api-docs*`
   npm script), `apis/asyncapi.yaml` is described narratively, by hand, in
-  `docs/docs/overview.md`, `docs/docs/ecosystem/context-map.md`, and the
+  `docs/docs/overview/introduction.md`, `docs/docs/ecosystem/integration.md`, `docs/docs/ecosystem/context-map.md`, and the
   relevant ADR (`0007-analytical-data-product.md` for the analytics
   topic, `0013-labor-performance-integration-events.md` for the
   integration topic) — see `.claude/rules/docs-and-api-drift.md` for the
