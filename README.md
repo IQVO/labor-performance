@@ -19,6 +19,22 @@ bounded-context Go service in this fleet, after `order-management`,
 (includes the ddd-crew DDD artifact pack — canvases, context map,
 EventStorming, class/ER/sequence diagrams — under *DDD artifacts*).
 
+## Documentation
+
+Published at https://iqvo.github.io/labor-performance/ (sources under
+[`docs/docs/`](docs/docs/)):
+
+| Area | Pages |
+| --- | --- |
+| Overview | [Introduction](docs/docs/overview/introduction.md) · [Architecture](docs/docs/overview/architecture.md) · [Quickstart](docs/docs/overview/quickstart.md) |
+| Operations | [Configuration](docs/docs/operations/configuration.md) · [Runbook](docs/docs/operations/runbook.md) · [Observability](docs/docs/operations/observability.md) · [Troubleshooting](docs/docs/operations/troubleshooting.md) |
+| Development | [Testing](docs/docs/development/testing.md) |
+| Domain | [Domain vision](docs/docs/business-context/domain-vision.md) · [Subdomain classification](docs/docs/ddd/subdomain-classification.md) · [Use cases](docs/docs/ddd/use-cases.md) · [DDD artifacts](docs/docs/ddd/ddd-artifacts.md) |
+| Ecosystem | [Integration](docs/docs/ecosystem/integration.md) · [Context map](docs/docs/ecosystem/context-map.md) |
+| MCP | [MCP tools](docs/docs/mcp/tools.md) · [Governance charter](docs/docs/mcp/governance-charter.md) |
+| Decisions | [ADR index](docs/docs/adr/about.md) (31 records) |
+| APIs | [`apis/openapi.yaml`](apis/openapi.yaml) · [`apis/openapi-reports.yaml`](apis/openapi-reports.yaml) · [`apis/asyncapi.yaml`](apis/asyncapi.yaml) |
+
 ## Why this context exists
 
 Competitor research (Manhattan Active Labor Management, Blue Yonder
@@ -593,6 +609,7 @@ and have since been added, bringing this service to full fleet parity with
 28. [0028 — Gateway API HTTPRoute, disabled by default, alongside Ingress](docs/docs/adr/0028-gateway-api-httproute.md)
 29. [0029 — Kafka writer durability: RequireAll acks + 10ms BatchTimeout](docs/docs/adr/0029-kafka-writer-durability.md)
 30. [0030 — MCP eval suite and governance gate, run as plain go test](docs/docs/adr/0030-mcp-eval-and-governance-gates.md)
+31. [0031 — Analytics consumer: atomic claim + apply, commit after success, retry transient failures](docs/docs/adr/0031-analytics-consumer-atomic-claim-and-retry.md)
 
 The same list, with statuses, is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
 

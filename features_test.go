@@ -4,14 +4,15 @@
 // service's own httptest suite uses. It is a black-box test — it only
 // ever touches the REST API.
 //
-// Scope note: this suite covers the REST-visible behavior only (define/
-// revise/get a standard, get-scorecard, get-task-type-performance). The
-// Kafka-consumer-driven RecordTaskPerformance path is NOT REST-reachable,
-// so it is NOT BDD material here — it already has its own unit
-// (internal/application/usecases) and integration
-// (internal/adapters/inbound/kafka/consumer_integration_test.go) test
-// coverage. This mirrors what wes-work-planning's suite does for ITS REST
-// contract.
+// Scope note: every ASSERTION goes through the REST contract (define/
+// revise/get a standard, scorecard, task-type performance, utilization) or
+// the events the service publishes. The facts those read models report
+// arrive on fulfillment-execution's TaskCompleted Kafka events, which are
+// not REST-reachable, so features_wave2_test.go seeds them through the real
+// RecordTaskPerformance use case — the one the Kafka consumer calls. The
+// consumer's wire decoding and the Postgres adapters keep their own unit
+// and integration tests (internal/adapters/inbound/kafka/
+// consumer_integration_test.go).
 package main_test
 
 import (
@@ -33,15 +34,25 @@ import (
 	"github.com/claudioed/labor-performance/internal/application/usecases"
 )
 
+// harness exposes the in-memory collaborators behind the server so wave-2
+// steps can seed facts the way the Kafka consumer does (through the real
+// RecordTaskPerformance use case) and observe published events, without
+// ever bypassing the REST contract for what is asserted.
+type harness struct {
+	clock     *tickClock
+	record    *usecases.RecordTaskPerformance
+	published *recordingPublisher
+}
+
 // newServer builds the production router over fresh in-memory adapters and
 // serves it from an httptest server, mirroring the wiring in
 // internal/adapters/inbound/http/server_test.go.
-func newServer() *httptest.Server {
+func newServer() (*httptest.Server, *harness) {
 	standards := memory.NewStandardRepo()
 	performances := memory.NewPerformanceRepo()
 	idlePeriods := memory.NewIdlePeriodRepo()
-	publisher := events.NewLogPublisher(nil)
-	clock := memory.SystemClock{}
+	publisher := &recordingPublisher{inner: events.NewLogPublisher(nil)}
+	clock := &tickClock{at: baseInstant}
 
 	s := &inboundhttp.Server{
 		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock},
@@ -51,13 +62,26 @@ func newServer() *httptest.Server {
 		GetUtilization:         &usecases.GetUtilization{Performances: performances, IdlePeriods: idlePeriods, Clock: clock},
 	}
 
-	return httptest.NewServer(inboundhttp.NewRouter(s, nil, ""))
+	h := &harness{
+		clock:     clock,
+		published: publisher,
+		record: &usecases.RecordTaskPerformance{
+			Performances: performances,
+			Standards:    standards,
+			Processed:    memory.NewProcessedEventRepo(),
+			Events:       publisher,
+			Clock:        clock,
+			IdlePeriods:  idlePeriods,
+		},
+	}
+	return httptest.NewServer(inboundhttp.NewRouter(s, nil, "")), h
 }
 
 // world is the per-scenario state: one server with its own in-memory
 // adapters, plus the last HTTP response the steps made.
 type world struct {
 	server *httptest.Server
+	h      *harness
 
 	lastStatus      int
 	lastBody        []byte
@@ -68,7 +92,7 @@ func (w *world) reset() {
 	if w.server != nil {
 		w.server.Close()
 	}
-	w.server = newServer()
+	w.server, w.h = newServer()
 	w.lastStatus = 0
 	w.lastBody = nil
 	w.lastContentType = ""
@@ -434,6 +458,8 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the utilization response reports (\d+) task seconds, (\d+) idle seconds and (\d+) open gap seconds$`, w.utilizationResponseReportsSeconds)
 	sc.Step(`^the utilization response reports a null utilization percent$`, w.utilizationResponseReportsNullPercent)
 	sc.Step(`^the response is an RFC 7807 problem$`, w.responseIsRFC7807Problem)
+
+	registerWave2(sc, w) // features_wave2_test.go
 }
 
 // TestFeatures runs the Gherkin acceptance suite under features/.
