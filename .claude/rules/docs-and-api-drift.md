@@ -71,7 +71,7 @@ wiring in this repo's `docs/` site (the fleet-wide aggregator
 `warehouse-docs` has that tooling; this per-service site does not). The
 AsyncAPI contract is instead described narratively in:
 
-- `docs/docs/overview.md` (the fleet diagram)
+- `docs/docs/overview/introduction.md` (the fleet diagram) and `docs/docs/ecosystem/integration.md` (every upstream/downstream edge)
 - `docs/docs/ecosystem/context-map.md` (the inbound relationship with the
   full CloudEvents example, and the outbound integration topic)
 - `docs/docs/ddd/subdomain-classification.md` (domain events and where
@@ -134,3 +134,11 @@ until that content reaches `main` via the next GitFlow release. This is
 consistent with the fleet's release cadence (docs ship with releases,
 same as code) but worth knowing explicitly: don't expect a `develop`-only
 docs change to appear on the live site immediately.
+
+## Hand-written operational pages track the code
+
+Env vars, Kafka topics, metric instruments and HTTP routes are documented by
+hand in `docs/docs/operations/{configuration,runbook,observability,troubleshooting}.md`,
+`docs/docs/development/testing.md` and `docs/docs/mcp/tools.md`. Nothing
+regenerates them: update the matching page in the same PR as the code change
+(a new `getenv`, topic, instrument or route).
