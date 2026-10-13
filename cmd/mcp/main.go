@@ -145,6 +145,11 @@ func newRouter(mcpHandler http.Handler, serviceName string) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	r.Handle("/", mcpHandler)
+	// /mcp is the fleet's Kong host contract: every chart exposes its MCP
+	// server at /api/mcp/<context>, rewritten to exactly /mcp (the other
+	// twelve cmd/mcp binaries mount both; found live by exposure-policy
+	// section 12 after the chart-owned rollout — this server 404'd on /mcp).
+	r.Handle("/mcp", mcpHandler)
 	return r
 }
 
