@@ -204,7 +204,9 @@ func (c *Consumer) Run(ctx context.Context) error {
 // raw payload and the last error's context, and the offset is committed
 // anyway — one poison message must never block every task behind it on
 // this partition. A commit failure, or a DLQ publish failure, is the
-// only thing that still aborts the consume loop.
+// only thing that still aborts the consume loop. A handler failure that
+// only the cancellation of ctx caused (pod shutdown mid-handle) is NOT
+// poison: ctx.Err() is returned without dead-lettering or committing.
 func (c *Consumer) handleMessage(ctx context.Context, msg kafkago.Message) error {
 	topic := c.reader.Config().Topic
 
@@ -238,6 +240,12 @@ func (c *Consumer) handleMessage(ctx context.Context, msg kafkago.Message) error
 	handleErr := c.handleWithRetry(msgCtx, evt)
 	if handleErr == nil {
 		return c.commit(ctx, msg)
+	}
+	if ctx.Err() != nil {
+		// Shutting down: never dead-letter a message only cancellation
+		// interrupted. The offset stays uncommitted, so it is redelivered
+		// and the processed-events claim absorbs the replay.
+		return ctx.Err()
 	}
 
 	recordSpanError(span, handleErr)
