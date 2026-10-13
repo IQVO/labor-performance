@@ -89,6 +89,7 @@ Typos, broken links and formatting are of course fair game.
 | [0029](./0029-kafka-writer-durability.md) | Kafka writer durability: RequireAll acks + 10ms BatchTimeout | Accepted |
 | [0030](./0030-mcp-eval-and-governance-gates.md) | MCP eval suite and governance gate, run as plain go test | Accepted |
 | [0031](./0031-analytics-consumer-atomic-claim-and-retry.md) | Analytics consumer: atomic claim + apply, commit after success, retry transient failures | Accepted |
+| [0033](./0033-mcp-invocation-and-denial-counters.md) | MCP tool invocation and denial counters (governance charter §9) | Accepted |
 
 The Status column repeats each record's own `## Status` section. Four
 records whose bodies say plain **Accepted** have since been partly

@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/claudioed/labor-performance/internal/application/usecases"
@@ -40,6 +41,11 @@ type Deps struct {
 	// get_task_type_utilization, the SAME use case the REST
 	// utilization endpoints call -- never a parallel code path.
 	GetUtilization *usecases.GetUtilization
+	// MeterProvider feeds the charter's invocation and denial counters
+	// (metrics.go, ADR 0033). nil means the global provider, which
+	// telemetry.Setup installs before cmd/mcp builds the server; tests
+	// inject their own.
+	MeterProvider metric.MeterProvider
 }
 
 // --- get_associate_scorecard --------------------------------------------------
@@ -119,47 +125,54 @@ func (d Deps) getTaskTypeUtilization(ctx context.Context, in taskTypeUtilization
 // --- registration -------------------------------------------------------------
 
 // registerTools adds every tool to the server, each wrapped so its handler
-// runs inside an OTel span named "mcp.tool <name>".
+// runs inside an OTel span named "mcp.tool <name>", and returns the
+// registered names (the invocation and denial counters only label a call
+// with a name the server actually registers).
 //
 // labor-performance exposes no write use case over MCP (see Deps' own doc
 // comment): every registered tool is a read tool.
-func (d Deps) registerTools(server *mcp.Server) {
+func (d Deps) registerTools(server *mcp.Server) []string {
 	readOnly := true
+	names := make([]string, 0, 4)
 
-	addTool(server, &mcp.Tool{
+	names = append(names, addTool(server, &mcp.Tool{
 		Name:        "get_associate_scorecard",
 		Description: "Return one associate's performance scorecard: task count, mean efficiency percent, a per-task-type breakdown, and a trend/coaching-flag signal computed over their most recent tasks. Use it to answer 'how is this associate doing' questions. The coaching flag is a visibility signal only, never an automated action -- surface it to a human, do not act on it autonomously.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
-	}, d.getAssociateScorecard)
+	}, d.getAssociateScorecard))
 
-	addTool(server, &mcp.Tool{
+	names = append(names, addTool(server, &mcp.Tool{
 		Name:        "get_task_type_performance",
 		Description: "Return the fleet-wide (all-associates) performance read model for one task type (PICK, PACK, or SLAM): task count, mean efficiency percent, and the real measured mean duration. Use it to answer 'how is this task type performing across the whole floor' questions, independent of any single associate.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
-	}, d.getTaskTypePerformance)
+	}, d.getTaskTypePerformance))
 
-	addTool(server, &mcp.Tool{
+	names = append(names, addTool(server, &mcp.Tool{
 		Name:        "get_labor_standard",
 		Description: "Return the currently-active engineered labor standard (expected seconds) for one task type. Use it to answer 'what is the target pace for this task type' questions, e.g. before judging whether an observed pace is fast or slow.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
-	}, d.getLaborStandard)
+	}, d.getLaborStandard))
 
-	addTool(server, &mcp.Tool{
+	names = append(names, addTool(server, &mcp.Tool{
 		Name:        "get_task_type_utilization",
 		Description: "Return idleness/utilization for one task type over a trailing window: measured task time, measured idle time (recorded between-task waits that already ended), and a derived utilization percent. openGapSeconds is always 0 for a task type: the still-running open gap of someone idle right now is computed per associate only (GET /associates/{associateId}/utilization), so a task-type result can understate idleness by whatever gap is still open. Use it to answer 'how idle vs. busy has this task type been' questions -- e.g. distinguishing a genuinely understaffed task type from one with a stuck/lease-churn problem. utilizationPct is null when nothing was observed in the window; never treat null as 0%.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
-	}, d.getTaskTypeUtilization)
+	}, d.getTaskTypeUtilization))
+	return names
 }
 
-// addTool registers one tool. It centralises the cross-cutting concern
-// every tool shares: a span per call, and mapping a handler error onto the
-// span before returning it.
+// addTool registers one tool and returns its name. It centralises the
+// cross-cutting concern every tool shares: a span per call, mapping a
+// handler error onto the span before returning it, and telling the
+// counters' middleware that the handler ran (so the call is counted as ok
+// or error, not as denied).
 func addTool[In, Out any](
 	server *mcp.Server,
 	tool *mcp.Tool,
 	handle func(context.Context, In) (Out, error),
-) {
+) string {
 	mcp.AddTool(server, tool, func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		markHandlerRan(ctx)
 		var zero Out
 		ctx, span := otel.Tracer(tracerName).Start(ctx, "mcp.tool "+tool.Name,
 			trace.WithAttributes(
@@ -177,4 +190,5 @@ func addTool[In, Out any](
 		span.SetAttributes(attribute.String("mcp.tool.outcome", "ok"))
 		return nil, out, nil
 	})
+	return tool.Name
 }

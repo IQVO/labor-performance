@@ -114,6 +114,7 @@ const sidebars: SidebarsConfig = {
         'adr/0029-kafka-writer-durability',
         'adr/0030-mcp-eval-and-governance-gates',
         'adr/0031-analytics-consumer-atomic-claim-and-retry',
+        'adr/0033-mcp-invocation-and-denial-counters',
       ],
     },
   ],

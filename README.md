@@ -610,6 +610,7 @@ and have since been added, bringing this service to full fleet parity with
 29. [0029 — Kafka writer durability: RequireAll acks + 10ms BatchTimeout](docs/docs/adr/0029-kafka-writer-durability.md)
 30. [0030 — MCP eval suite and governance gate, run as plain go test](docs/docs/adr/0030-mcp-eval-and-governance-gates.md)
 31. [0031 — Analytics consumer: atomic claim + apply, commit after success, retry transient failures](docs/docs/adr/0031-analytics-consumer-atomic-claim-and-retry.md)
+33. [0033 — MCP tool invocation and denial counters](docs/docs/adr/0033-mcp-invocation-and-denial-counters.md)
 
 The same list, with statuses, is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
 
