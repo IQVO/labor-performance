@@ -28,7 +28,7 @@ COVERAGE_THRESHOLD := 90
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build vet fmt fmt-check lint test coverage integration-kafka-testcontainers bdd contract arch-test mutation-fast mutation vuln api-lint check check-all
+.PHONY: help build vet fmt fmt-check lint test coverage integration-kafka-testcontainers bdd contract chart-test arch-test mutation-fast mutation vuln api-lint check check-all
 
 help:
 	@echo "labor-performance — local quality gate (targets mirror .github/workflows/ci.yml)"
@@ -46,6 +46,7 @@ help:
 	@echo "  contract          scripts/contract-test.sh — Schemathesis vs apis/openapi.yaml"
 	@echo "                    (boots the service in-memory; needs st: pip install"
 	@echo "                     'schemathesis==4.28.0')"
+	@echo "  chart-test        Helm chart render + Service selector tests (helm + PyYAML)"
 	@echo "  arch-test         Architecture fitness tests (internal/architecture/)"
 	@echo "  mutation-fast     Fast blocking mutation subset (internal/domain/performance)"
 	@echo "  mutation          Exhaustive mutation run over the whole domain layer (slow)"
@@ -107,6 +108,13 @@ bdd:
 # installed); CI runs it as its own job on every push and PR.
 contract:
 	./scripts/contract-test.sh
+
+# Helm chart render and Service selector tests — mirrors the `chart-tests`
+# CI job. Needs helm and Python 3 with PyYAML on PATH.
+chart-test:
+	bash charts/labor-performance/tests/render_test.sh
+	sh charts/labor-performance/tests/render-assertions.sh
+	python3 charts/labor-performance/tests/test_service_selectors.py
 
 arch-test:
 	$(GO) test ./internal/architecture/... -v

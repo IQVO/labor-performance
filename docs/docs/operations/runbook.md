@@ -51,7 +51,7 @@ Source: `charts/labor-performance/templates/*.yaml`, `cmd/*/main.go`.
 | OLTP API (`cmd/labor`) | `<fullname>`, `component=api` | always | image entrypoint `./labor` | `http` 8080 (`service.targetPort`) | `<fullname>` ClusterIP, port 80 → `http` | startup `GET /healthz` (every 2s, 30 failures allowed), liveness `GET /healthz`, readiness `GET /readyz` |
 | Analytics projector (`cmd/labor-projector`) | `<fullname>-projector`, `component=analytics-projector` | `analytics.enabled=true` | `/app/labor-projector` | `admin` 8091 (hard-coded in the template) | none | startup, liveness and readiness all `GET /healthz` on `admin` |
 | Reports reader (`cmd/labor-reports`) | `<fullname>-reports`, `component=analytics-reports` | `analytics.enabled=true` | `/app/labor-reports` | `http` 8092 | `<fullname>-reports` ClusterIP, port 80 → `http` | startup, liveness and readiness all `GET /healthz` |
-| MCP server (`cmd/mcp`) | `<fullname>-mcp`, `component=mcp` | `mcp.enabled=true` | `/app/mcp` | `http` 8090 | `<fullname>-mcp` ClusterIP, port 8090 → `http` | `tcpSocket` for startup, liveness and readiness |
+| MCP server (`cmd/mcp`) | `<fullname>-mcp`, `component=mcp` | `mcp.enabled=true` | `/app/mcp` | `http` 8090 | `<fullname>-mcp` ClusterIP, port 8090 → `http` | startup, liveness and readiness all `GET /healthz` |
 | Operator remote (`web/`, `labor_mfe`) | `<fullname>-frontend`, `component=frontend` | `frontend.enabled=true` | nginx-unprivileged | 8080 | `<fullname>-frontend` ClusterIP, port 80 | see the chart |
 
 `charts/labor-performance/tests/test_service_selectors.py` asserts that
@@ -72,7 +72,7 @@ in this chart.
   Postgres or Kafka either.
 - Boot order is what makes a successful probe meaningful. Each binary runs
   its migrations and pings its pool (both retried by `bootretry`: 5
-  attempts, about 31s) **before** it starts listening. If any of that
+  attempts, 1+2+4+8 = 15s of backoff plus the attempts themselves) **before** it starts listening. If any of that
   fails, the process exits non-zero instead of serving. So once a pod
   answers its probes, migrations have been applied and the database was
   reachable at boot. Kafka is never checked: the consumer and relay start
@@ -81,9 +81,9 @@ in this chart.
   30). That leaves room for the boot retry to outlast the fleet's known
   ~10s first-dial reset from Istio native sidecars
   ([ADR 0027](../adr/0027-bootretry-and-startup-probe.md)).
-- `cmd/mcp` now has its own `GET /healthz`, but the chart still probes
-  the MCP pod with `tcpSocket`. The template comment saying there is no
-  `/healthz` route is out of date.
+- `cmd/mcp` serves `GET /healthz` next to the MCP endpoint at `/`, and the
+  chart probes the MCP pod with `httpGet /healthz` for startup, liveness and
+  readiness (gap fix D24; it used to be `tcpSocket`).
 
 ### Graceful shutdown (`cmd/labor`)
 
@@ -194,6 +194,14 @@ aggregate change. A relay goroutine in every `cmd/labor` replica then:
   that row, commits what was already sent, logs `outbox relay pass failed`,
   and retries after `OUTBOX_RELAY_INTERVAL`. Later rows wait, which keeps
   per-key ordering;
+- stops claiming a row once it has failed `OUTBOX_MAX_ATTEMPTS` times
+  (default 20, `0` = unlimited; [ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)).
+  The send that reaches the cap logs `outbox relay: row reached the
+  attempt cap ...` at ERROR with `outbox_id`, `topic`, `event_type`, `key`,
+  `attempts` and `max_attempts`. From then on later rows, **including rows
+  with the same key**, overtake it. The row stays in `outbox_events` with
+  its `attempts` and `last_error` until you re-arm it (see
+  [Re-arm an excluded outbox row](#re-arm-an-excluded-outbox-row));
 - after a full batch, runs the next pass immediately. Otherwise it sleeps
   for `OUTBOX_RELAY_INTERVAL`.
 
@@ -221,8 +229,10 @@ then every `HOUSEKEEPING_INTERVAL`, and deletes in batches of 1000:
 It logs `housekeeping sweep` with `idempotency_keys_deleted` and
 `outbox_events_deleted` when it deletes anything, and
 `housekeeping sweep failed` on error. Several replicas can run it at
-once safely. `0` does **not** disable it (see
-[Configuration](./configuration.md#zero-does-not-disable-housekeeping)).
+once safely. At boot it logs `housekeeping sweeper configured` with the
+values in effect. `HOUSEKEEPING_INTERVAL=0` disables it, and a `0`
+`IDEMPOTENCY_KEY_TTL` or `OUTBOX_RETENTION` keeps that table's rows
+forever (see [Configuration](./configuration.md#zero-disables-housekeeping)).
 
 ## Reports API (`cmd/labor-reports`)
 
@@ -308,7 +318,9 @@ Release names below assume `labor-performance` in namespace
 ### Restart after a secret or credential rotation
 
 Env vars are read once at process start, and the pod template only has a
-checksum for the ConfigMap, not for the Secrets. After rotating
+checksum for the ConfigMap, not for the Secrets. (The api Deployment
+mounts that ConfigMap with `envFrom`, so a ConfigMap change rolls the api
+pods by itself.) After rotating
 `DATABASE_URL`, `MIGRATIONS_DATABASE_URL`, `ANALYTICS_DATABASE_URL` or
 `ANALYTICS_READER_DATABASE_URL`, restart the affected Deployments:
 
@@ -342,11 +354,37 @@ SELECT id, topic, event_type, attempts, last_error, created_at
 FROM outbox_events WHERE published_at IS NULL ORDER BY id LIMIT 20;
 ```
 
-The relay retries them by itself once the broker is healthy. To resend a
+The relay retries them by itself once the broker is healthy, up to
+`OUTBOX_MAX_ATTEMPTS` failed sends per row. To resend a
 row that was already published (for example, after a downstream topic
 was recreated), set `published_at = NULL` on it. The relay sends it again
 with its original CloudEvents id, so idempotent consumers ignore it if
 they already have it. Rows are only resendable within `OUTBOX_RETENTION`.
+
+### Re-arm an excluded outbox row
+
+A row that reached `OUTBOX_MAX_ATTEMPTS` failed sends is no longer
+claimed ([ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)). List them
+(with the chart default of 20):
+
+```sql
+SELECT id, topic, event_type, key, attempts, last_error, created_at
+FROM outbox_events
+WHERE published_at IS NULL AND attempts >= 20
+ORDER BY id;
+```
+
+Fix the cause in `last_error` first (broker, topic, message size). Then
+re-arm the row so the next relay pass claims it again:
+
+```sql
+UPDATE outbox_events SET attempts = 0 WHERE id = ...;
+```
+
+Later rows with the same key may already have been published, so a
+consumer can see this event after newer ones for that key. The housekeeping
+sweeper never deletes an unpublished row, so an excluded row stays until it
+is re-armed and sent, or deleted by hand.
 
 ### Rebuild the analytical read model
 

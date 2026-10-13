@@ -8,9 +8,9 @@
 // driven by an operator over chi HTTP and RecordTaskPerformance is driven
 // by fulfillment-execution's TaskCompleted event over Kafka -- neither is
 // a decision an MCP-calling agent should make on this context's behalf.
-// This server therefore wires only the three read use cases
-// (GetAssociateScorecard, GetTaskTypePerformance, GetStandard) and exposes
-// only read tools.
+// This server therefore wires only the four read use cases
+// (GetAssociateScorecard, GetTaskTypePerformance, GetStandard,
+// GetUtilization) and exposes only read tools.
 package main
 
 import (
@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -205,14 +206,15 @@ func buildAdapters(ctx context.Context, databaseURL, migrationsDatabaseURL, migr
 	}, pool.Close, nil
 }
 
-// newJSONHandler mirrors cmd/labor/main.go's newLogger level parsing, kept
-// local to this binary so both composition roots stay free-standing.
+// newJSONHandler mirrors cmd/labor/main.go's newLogger level parsing
+// (case-insensitive, "warning" is an alias of "warn"), kept local to this
+// binary so both composition roots stay free-standing.
 func newJSONHandler(level string) slog.Handler {
 	var lvl slog.Level
-	switch level {
+	switch strings.ToLower(level) {
 	case "debug":
 		lvl = slog.LevelDebug
-	case "warn":
+	case "warn", "warning":
 		lvl = slog.LevelWarn
 	case "error":
 		lvl = slog.LevelError
