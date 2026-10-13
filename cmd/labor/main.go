@@ -427,10 +427,16 @@ func buildEventPublisher(p *persistence, logger *slog.Logger) (ports.EventPublis
 	}
 
 	sink := outboundkafka.NewRelaySink(brokers)
+	// OUTBOX_MAX_ATTEMPTS (ADR 0032, gap fix D12): after this many failed
+	// sends a row is no longer claimed, so one poison row cannot block the
+	// relay forever. 0 = unlimited.
+	maxAttempts := nonNegativeIntEnv(outboxMaxAttemptsEnv, defaultOutboxMaxAttempts, logger)
 	relay := postgres.NewOutboxRelay(p.pool, sink, logger,
-		postgres.WithInterval(durationEnv("OUTBOX_RELAY_INTERVAL", time.Second)))
+		postgres.WithInterval(durationEnv("OUTBOX_RELAY_INTERVAL", time.Second)),
+		postgres.WithMaxAttempts(maxAttempts))
 	logger.Info("event publisher configured", "publisher", "kafka", "mode", "outbox",
-		"topics", []string{cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TopicLaborPerformanceEvents}, "brokers", brokers)
+		"topics", []string{cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TopicLaborPerformanceEvents}, "brokers", brokers,
+		"outbox_max_attempts", maxAttempts)
 	outbox := postgres.NewOutboxPublisher(p.pool, analytics, integration)
 	return outboundkafka.NewFanOutPublisher(logPublisher, outbox), relay, func() {
 		if err := sink.Close(); err != nil {
@@ -580,6 +586,30 @@ func buildSweeper(pool *pgxpool.Pool, logger *slog.Logger) *postgres.Sweeper {
 		postgres.WithOutboxRetention(outboxRetention),
 		postgres.WithSweeperLogger(logger),
 	)
+}
+
+// OUTBOX_MAX_ATTEMPTS caps how many failed sends an outbox row may
+// accumulate before the relay stops claiming it (ADR 0032). 0 = unlimited.
+const (
+	outboxMaxAttemptsEnv     = "OUTBOX_MAX_ATTEMPTS"
+	defaultOutboxMaxAttempts = 20
+)
+
+// nonNegativeIntEnv reads a non-negative integer from key, falling back to
+// fallback for an unset value and, with a warning, for an unparseable or
+// negative one. 0 is a valid value (OUTBOX_MAX_ATTEMPTS uses it for
+// "unlimited").
+func nonNegativeIntEnv(key string, fallback int, logger *slog.Logger) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n < 0 {
+		logger.Warn("ignoring invalid integer env var", "key", key, "value", raw, "fallback", fallback)
+		return fallback
+	}
+	return n
 }
 
 func getenv(key, fallback string) string {

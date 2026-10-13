@@ -88,12 +88,14 @@ Operationally useful messages:
 | Message | Level | Binary | Fields | Meaning |
 | --- | --- | --- | --- | --- |
 | `database url not configured; using in-memory adapters` | INFO | labor, mcp | — | `DATABASE_URL` is empty, so nothing is persisted. |
-| `event publisher configured` | INFO | labor | `publisher`, `mode` (`direct`/`outbox`), `topics`, `brokers` | Which publishing path is active. |
+| `event publisher configured` | INFO | labor | `publisher`, `mode` (`direct`/`outbox`), `topics`, `brokers`, `outbox_max_attempts` (outbox mode) | Which publishing path is active. |
+| `housekeeping sweeper configured` | INFO | labor | `interval`, `enabled`, `idempotency_key_ttl`, `outbox_retention` | Sweeper settings in effect at boot (`enabled=false` when `HOUSEKEEPING_INTERVAL` is `0` or negative). |
 | `retrying` / `succeeded after retry` | WARN / INFO | all | `op`, `attempt`, `in`, `err` | Boot-time dial retry for migrations or DB ping. |
 | `invalid cloudevent, sending to dead-letter topic` | WARN | labor | `topic`, `partition`, `offset`, `dlq_topic`, `error` | Poison message dead-lettered. |
 | `exhausted retries, sending to dead-letter topic` | WARN | labor | `topic`, `dlq_topic`, `id`, `type`, `attempts`, `error` | `RecordTaskPerformance` failed 3 times. |
 | `skipping idle gap: out-of-order Kafka delivery` | WARN | labor | `associate_id`, `task_id`, `error` | Expected occasionally. No idle period is recorded for that task. |
 | `outbox relay pass failed` | ERROR | labor | `error` | A send or DB error. The relay retries after `OUTBOX_RELAY_INTERVAL`. |
+| `outbox relay: row reached the attempt cap and is excluded from future claims; ...` | ERROR | labor | `outbox_id`, `topic`, `event_type`, `key`, `attempts`, `max_attempts`, `error` | Logged once, when a row's failed sends reach `OUTBOX_MAX_ATTEMPTS` ([ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)). The row is no longer claimed until re-armed. |
 | `housekeeping sweep` / `housekeeping sweep failed` | INFO / ERROR | labor | `idempotency_keys_deleted`, `outbox_events_deleted`, `error` | Sweeper result. |
 | `outbox lag gauge unavailable` | WARN | labor | `error` | The gauge could not be registered at boot. |
 | `analytics message handling failed; retrying` | ERROR | projector | `topic`, `offset`, `attempt`, `retry_in`, `error` | Projection hit a transient DB error. The same message is retried. |
@@ -126,7 +128,7 @@ Kafka consumer-group lag.
 
 | Alert | Expression (Prometheus, after Collector translation) | Why |
 | --- | --- | --- |
-| Outbox stuck | `max(labor_performance_outbox_lag_seconds) > 60` for 5m | The relay cannot reach Kafka or keeps failing on one row. Downstream (`workforce-management`, projector) stops receiving events. |
+| Outbox stuck | `max(labor_performance_outbox_lag_seconds) > 60` for 5m | The relay cannot reach Kafka or keeps failing on one row. Downstream (`workforce-management`, projector) stops receiving events. A row excluded by `OUTBOX_MAX_ATTEMPTS` also keeps this gauge high while newer events flow: look for the ERROR `outbox relay: row reached the attempt cap`. |
 | Reports stale | `GET /reports/performance/freshness` → `lagSeconds` > 900. This is a blackbox or ops-agent check, not a metric. | The projector has stopped applying events. |
 | Fulfillment consumer lag | broker lag of group `labor-performance` on `warehouse.fulfillment.events` keeps growing | Scorecards fall behind real completions. |
 | DLQ growth | any new message on `warehouse.fulfillment.events.dlq` | A poison message, or a persistent DB failure during scoring. |

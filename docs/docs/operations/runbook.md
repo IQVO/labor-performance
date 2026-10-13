@@ -194,6 +194,14 @@ aggregate change. A relay goroutine in every `cmd/labor` replica then:
   that row, commits what was already sent, logs `outbox relay pass failed`,
   and retries after `OUTBOX_RELAY_INTERVAL`. Later rows wait, which keeps
   per-key ordering;
+- stops claiming a row once it has failed `OUTBOX_MAX_ATTEMPTS` times
+  (default 20, `0` = unlimited; [ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)).
+  The send that reaches the cap logs `outbox relay: row reached the
+  attempt cap ...` at ERROR with `outbox_id`, `topic`, `event_type`, `key`,
+  `attempts` and `max_attempts`. From then on later rows, **including rows
+  with the same key**, overtake it. The row stays in `outbox_events` with
+  its `attempts` and `last_error` until you re-arm it (see
+  [Re-arm an excluded outbox row](#re-arm-an-excluded-outbox-row));
 - after a full batch, runs the next pass immediately. Otherwise it sleeps
   for `OUTBOX_RELAY_INTERVAL`.
 
@@ -344,11 +352,37 @@ SELECT id, topic, event_type, attempts, last_error, created_at
 FROM outbox_events WHERE published_at IS NULL ORDER BY id LIMIT 20;
 ```
 
-The relay retries them by itself once the broker is healthy. To resend a
+The relay retries them by itself once the broker is healthy, up to
+`OUTBOX_MAX_ATTEMPTS` failed sends per row. To resend a
 row that was already published (for example, after a downstream topic
 was recreated), set `published_at = NULL` on it. The relay sends it again
 with its original CloudEvents id, so idempotent consumers ignore it if
 they already have it. Rows are only resendable within `OUTBOX_RETENTION`.
+
+### Re-arm an excluded outbox row
+
+A row that reached `OUTBOX_MAX_ATTEMPTS` failed sends is no longer
+claimed ([ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)). List them
+(with the chart default of 20):
+
+```sql
+SELECT id, topic, event_type, key, attempts, last_error, created_at
+FROM outbox_events
+WHERE published_at IS NULL AND attempts >= 20
+ORDER BY id;
+```
+
+Fix the cause in `last_error` first (broker, topic, message size). Then
+re-arm the row so the next relay pass claims it again:
+
+```sql
+UPDATE outbox_events SET attempts = 0 WHERE id = ...;
+```
+
+Later rows with the same key may already have been published, so a
+consumer can see this event after newer ones for that key. The housekeeping
+sweeper never deletes an unpublished row, so an excluded row stays until it
+is re-armed and sent, or deleted by hand.
 
 ### Rebuild the analytical read model
 

@@ -70,6 +70,10 @@ spec:
               value: {{ .Values.config.eventPublisher | quote }}
             - name: OUTBOX_RELAY_INTERVAL
               value: {{ .Values.config.outboxRelayInterval | quote }}
+            # ADR 0032: failed sends after which an outbox row is no longer
+            # claimed (0 = unlimited).
+            - name: OUTBOX_MAX_ATTEMPTS
+              value: {{ .Values.config.outboxMaxAttempts | quote }}
             - name: HOUSEKEEPING_INTERVAL
               value: {{ .Values.config.housekeepingInterval | quote }}
             - name: IDEMPOTENCY_KEY_TTL

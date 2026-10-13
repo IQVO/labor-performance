@@ -90,7 +90,7 @@ A separate feature file,
   container.
 - **Files** (all `//go:build integration`, 16 in total):
   - Postgres repos: `internal/adapters/outbound/postgres/{integration,standard_repo,performance_repo,idle_period_repo}_integration_test.go`
-  - outbox and relay: `outbox_integration_test.go`, `outbox_lag_integration_test.go`
+  - outbox and relay: `outbox_integration_test.go` (including the attempt cap of [ADR 0032](../adr/0032-outbox-relay-attempt-cap.md): `TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes`, `TestOutboxRelay_WithoutMaxAttempts_RetriesWithoutBound`), `outbox_lag_integration_test.go`
   - sweeper: `sweeper_integration_test.go`
   - pool limits (`statement_timeout` really applied): `pool_limits_integration_test.go`
   - analytics store: `internal/adapters/outbound/analyticsstore/postgres_integration_test.go`
@@ -173,6 +173,7 @@ A separate feature file,
 | `TestCloudEventsOnly` | Kafka code uses the CloudEvents SDK (no hand-built envelopes), and nothing mentions the retired `EVENT_ENVELOPE_MODE` toggle. |
 | `TestReplayConsumersSetCommitInterval` | A full-replay consumer whose group id comes from a "unique group" function call must set `CommitInterval`. |
 | `TestEventCatalogueMatchesContract`, `TestEventCatalogueDetector` | Every CloudEvents `type` that `apis/asyncapi.yaml` declares for this service also appears in a CloudEvents ADR under `docs/docs/adr/`. |
+| `TestOutboxRelaysPassAttemptCap` (+ `TestOutboxRelayCapSensorFailsOnBadFixtures`) | Every non-test file under `cmd/` that calls `NewOutboxRelay` passes `WithMaxAttempts`, so the relay attempt cap is always explicit ([ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)). |
 | `TestMCPOptionalToolInputsCarryOmitempty` (+ `TestMCPOptionalToolInputsSensorFailsOnBadFixtures`) | An MCP tool input field whose `jsonschema` description says it is optional (the word "optional", or "when/if omitted") carries `omitempty` in its `json` tag. Without it the MCP SDK marks the field required and a call that leaves it out is rejected before the handler runs (gap fix D16). |
 
 ## Other CI jobs

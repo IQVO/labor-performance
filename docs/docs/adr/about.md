@@ -67,7 +67,7 @@ Typos, broken links and formatting are of course fair game.
 | [0007](./0007-analytical-data-product.md) | Per-service analytical data product (the "Labor Performance Report") | Accepted |
 | [0008](./0008-standard-metrics-convention.md) | Standard metrics convention across the fleet | Accepted |
 | [0009](./0009-mcp-inbound-adapter.md) | Model Context Protocol as an inbound adapter, not a new service | Accepted — auth/scope sections superseded by 0012 |
-| [0010](./0010-transactional-outbox.md) | Transactional outbox for the analytics topic | Accepted |
+| [0010](./0010-transactional-outbox.md) | Transactional outbox for the analytics topic | Accepted (amended by 0032) |
 | [0011](./0011-rest-auth-static-bearer-scopes.md) | REST identity — fleet-standard static bearer keys with read/read-write scopes | Superseded by 0012 |
 | [0012](./0012-remove-rest-auth-layer.md) | Remove the REST/MCP identity layer | Accepted |
 | [0013](./0013-labor-performance-integration-events.md) | Labor performance publishes an integration event | Accepted |
@@ -89,6 +89,7 @@ Typos, broken links and formatting are of course fair game.
 | [0029](./0029-kafka-writer-durability.md) | Kafka writer durability: RequireAll acks + 10ms BatchTimeout | Accepted |
 | [0030](./0030-mcp-eval-and-governance-gates.md) | MCP eval suite and governance gate, run as plain go test | Accepted |
 | [0031](./0031-analytics-consumer-atomic-claim-and-retry.md) | Analytics consumer: atomic claim + apply, commit after success, retry transient failures | Accepted |
+| [0032](./0032-outbox-relay-attempt-cap.md) | Outbox relay attempt cap (`OUTBOX_MAX_ATTEMPTS`) | Accepted |
 
 The Status column repeats each record's own `## Status` section. Four
 records whose bodies say plain **Accepted** have since been partly
