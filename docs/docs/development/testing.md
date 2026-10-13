@@ -141,6 +141,12 @@ A separate feature file,
 - `governance_test.go` enforces the charter: at most 8 tools, `verb_noun`
   names, annotations and descriptions present
   ([ADR 0030](../adr/0030-mcp-eval-and-governance-gates.md)).
+- `metrics_test.go` pins the charter's invocation and denial counters
+  ([ADR 0033](../adr/0033-mcp-invocation-and-denial-counters.md)):
+  `TestToolMetrics_CountInvocationsByOutcomeAndDenialsByReason` drives the
+  real server over the in-memory transport with an SDK manual metric
+  reader (ok, handler errors, schema denials, an unknown tool),
+  `TestToolMetrics_OtherMethodsAreNotCounted` and `TestClassify`.
 
 ## Mutation testing (gremlins)
 

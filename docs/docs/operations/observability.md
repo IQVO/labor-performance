@@ -34,12 +34,18 @@ suffix. For example, `labor_performance.standards.defined` becomes
 | Instrument | Type | Unit | Attributes | Emitted by | Meaning |
 | --- | --- | --- | --- | --- | --- |
 | `labor_performance.standards.defined` | Int64Counter | `{standard}` | `outcome` = `accepted` \| `rejected` | `cmd/labor` (`internal/adapters/outbound/telemetry/metrics.go`, recorded in `DefineStandard`) | One per `POST /standards` that reaches the use case. `rejected` is recorded only when the `LaborStandard` aggregate refuses the values: `expectedSeconds <= 0`, a negative travel component, or a travel component larger than `expectedSeconds`. An unknown task type (400), malformed JSON, a missing `Idempotency-Key` or a 409 conflict is **not** counted. |
+| `labor_performance.mcp.tool.invocations` | Int64Counter | `{call}` | `mcp.tool.name` (a registered tool, or `unknown`), `outcome` = `ok` \| `error` \| `denied` | `cmd/mcp` (`internal/adapters/inbound/mcp/metrics.go`, a receiving middleware on `tools/call`) | One per `tools/call` request ([ADR 0033](../adr/0033-mcp-invocation-and-denial-counters.md), charter §9). `ok`: the handler returned a result. `error`: the handler ran and returned an error, including domain rejections and the handlers' own input checks (empty `associateId`, unknown task type). `denied`: the SDK refused the call before the handler ran. `tools/list`, resources and prompts are not counted. |
+| `labor_performance.mcp.tool.denials` | Int64Counter | `{call}` | `mcp.tool.name` (a registered tool, or `unknown`), `reason` = `unknown_tool` \| `invalid_arguments` | `cmd/mcp` (same middleware) | One per call the SDK refused before the handler ran: an unregistered tool (`unknown_tool`, label `unknown` so invented names cannot create series) or arguments that failed the input schema (`invalid_arguments`: wrong type, unknown extra argument, missing required field). There is no identity layer, so nothing is denied for a missing scope. |
 | `labor_performance.outbox.lag_seconds` | Float64ObservableGauge | `s` | none | `cmd/labor`, only with `DATABASE_URL` (`internal/adapters/outbound/postgres/outbox_metrics.go`) | Age of the oldest `outbox_events` row with `published_at IS NULL`, sampled at each collection. `0` when the outbox is drained. Registered even when `EVENT_PUBLISHER=log`, in which case it always reads 0 because nothing is enqueued. |
 
 Meter scopes: `github.com/claudioed/labor-performance` for the standards
-counter, and
+counter,
+`github.com/claudioed/labor-performance/internal/adapters/inbound/mcp`
+for the two MCP counters, and
 `github.com/claudioed/labor-performance/internal/adapters/outbound/postgres`
-for the lag gauge.
+for the lag gauge. After Collector translation the MCP counters are
+`labor_performance_mcp_tool_invocations_total{mcp_tool_name, outcome}` and
+`labor_performance_mcp_tool_denials_total{mcp_tool_name, reason}`.
 
 ### Instruments from libraries
 
@@ -58,7 +64,7 @@ not instrumented in-process. Read it from the broker for the groups
 | --- | --- | --- | --- |
 | Route pattern, for example `/standards/{taskType}` or `/reports/performance` | server | otelchi middleware on the `cmd/labor` and `cmd/labor-reports` routers | standard otelchi HTTP attributes |
 | `GET /healthz` or `POST /` (method plus route) | server | `cmd/mcp` (`otelchi.WithRequestMethodInSpanName`) | standard otelchi HTTP attributes |
-| `mcp.tool <tool name>`, for example `mcp.tool get_associate_scorecard` | internal | `internal/adapters/inbound/mcp/tools.go` | `mcp.tool.name`, `mcp.tool.outcome` = `ok` \| `error`, status `Error` on failure |
+| `mcp.tool <tool name>`, for example `mcp.tool get_associate_scorecard` | internal | `internal/adapters/inbound/mcp/tools.go` | `mcp.tool.name`, `mcp.tool.outcome` = `ok` \| `error`, status `Error` on failure. Only handled calls get this span: a call the SDK denies (unknown tool, schema-invalid arguments) is visible in `labor_performance.mcp.tool.denials` and the HTTP server span only. |
 | `kafka.consume warehouse.fulfillment.events` | consumer | `internal/adapters/inbound/kafka/consumer.go` | `messaging.system=kafka`, `messaging.operation.name=consume`, `messaging.destination.name`, `messaging.kafka.offset`, `messaging.destination.partition.id`, `messaging.message.id`, `cloudevents.event_type`, `cloudevents.event_source`, `cloudevents.event_subject` |
 | `kafka.consume warehouse.labor-performance.analytics` | consumer | `internal/adapters/inbound/kafka/analytics_consumer.go` (projector) | messaging attributes plus the four CloudEvents attributes above |
 | `kafka.publish warehouse.labor-performance.analytics` / `kafka.publish warehouse.labor-performance.events` | producer | direct-publish path (`EVENT_PUBLISHER=kafka` without a database) and the outbox `RelaySink` (named after the first message's topic) | `messaging.system=kafka`, `messaging.operation.name=publish`, `messaging.destination.name` |
@@ -132,5 +138,6 @@ Kafka consumer-group lag.
 | Reports stale | `GET /reports/performance/freshness` → `lagSeconds` > 900. This is a blackbox or ops-agent check, not a metric. | The projector has stopped applying events. |
 | Fulfillment consumer lag | broker lag of group `labor-performance` on `warehouse.fulfillment.events` keeps growing | Scorecards fall behind real completions. |
 | DLQ growth | any new message on `warehouse.fulfillment.events.dlq` | A poison message, or a persistent DB failure during scoring. |
+| MCP denials | `sum(rate(labor_performance_mcp_tool_denials_total[15m])) / sum(rate(labor_performance_mcp_tool_invocations_total[15m])) > 0.2` | An agent keeps calling tools that do not exist or sending ill-typed arguments: usually a prompt or client regression in `warehouse-ops-agent`. |
 | Standard rejections | `sum(rate(labor_performance_standards_defined_total{outcome="rejected"}[15m])) / sum(rate(labor_performance_standards_defined_total[15m])) > 0.5` | A broken input form or feed is submitting invalid standards. |
 | Crash loop | `kube_pod_container_status_restarts_total` rising for the release's pods | Migrations, DB or broker unreachable for longer than the boot retry budget. |
