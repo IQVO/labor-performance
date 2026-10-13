@@ -183,6 +183,7 @@ A separate feature file,
 | `TestEventCatalogueMatchesContract`, `TestEventCatalogueDetector` | Every CloudEvents `type` that `apis/asyncapi.yaml` declares for this service also appears in a CloudEvents ADR under `docs/docs/adr/`. |
 | `TestOutboxRelaysPassAttemptCap` (+ `TestOutboxRelayCapSensorFailsOnBadFixtures`) | Every non-test file under `cmd/` that calls `NewOutboxRelay` passes `WithMaxAttempts`, so the relay attempt cap is always explicit ([ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)). |
 | `TestMCPOptionalToolInputsCarryOmitempty` (+ `TestMCPOptionalToolInputsSensorFailsOnBadFixtures`) | An MCP tool input field whose `jsonschema` description says it is optional (the word "optional", or "when/if omitted") carries `omitempty` in its `json` tag. Without it the MCP SDK marks the field required and a call that leaves it out is rejected before the handler runs (gap fix D16). |
+| `TestKafkaWritersSetRequiredAcks` (+ `TestKafkaWriterAcksSensorBites`) | Every kafka-go `Writer` composite literal in a non-test file under `internal/` or `cmd/` sets `RequiredAcks` (the import alias is resolved per file). kafka-go defaults it to `RequireNone` (acks=0): the broker never confirms the write, so a broker blip silently drops the message while `WriteMessages` returns nil. The twin proves the sensor flags a bad fixture under any alias. |
 
 ## Other CI jobs
 
