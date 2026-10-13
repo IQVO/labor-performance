@@ -221,8 +221,10 @@ then every `HOUSEKEEPING_INTERVAL`, and deletes in batches of 1000:
 It logs `housekeeping sweep` with `idempotency_keys_deleted` and
 `outbox_events_deleted` when it deletes anything, and
 `housekeeping sweep failed` on error. Several replicas can run it at
-once safely. `0` does **not** disable it (see
-[Configuration](./configuration.md#zero-does-not-disable-housekeeping)).
+once safely. At boot it logs `housekeeping sweeper configured` with the
+values in effect. `HOUSEKEEPING_INTERVAL=0` disables it, and a `0`
+`IDEMPOTENCY_KEY_TTL` or `OUTBOX_RETENTION` keeps that table's rows
+forever (see [Configuration](./configuration.md#zero-disables-housekeeping)).
 
 ## Reports API (`cmd/labor-reports`)
 

@@ -51,7 +51,7 @@ All REST errors are RFC 7807 `application/problem+json` bodies with
 | `GET /reports/performance/freshness` → `lagSeconds` keeps growing | The projector is down or stuck retrying a transient DB error (`analytics message handling failed; retrying`). It retries forever and never skips. | Projector logs, and group `labor-performance-analytics` lag. | Fix the analytical DB. If the read model is corrupt, rebuild it ([Runbook](./runbook.md#rebuild-the-analytical-read-model)). |
 | Report shows `meanEfficiencyPct: null` beside `tasksRecorded > 0` | Every task in the bucket was unscorable. | `tasksScored` is 0. | Expected. Null is never shown as 0%. |
 | Report with `taskType=pick` returns empty rows | The rollup key is normalised to upper case and the reader compares exactly. | Repeat with `taskType=PICK`. | Send the task type in upper case. |
-| Old `outbox_events` or `idempotency_keys` rows never go away after setting the TTL or retention to `0` | `durationEnv` turns `0` back into the default. A `0` never disables the sweep. | — | See [Configuration](./configuration.md#zero-does-not-disable-housekeeping). |
+| Old `outbox_events` or `idempotency_keys` rows never go away | The TTL or retention is `0` (or negative), which keeps rows forever, or `HOUSEKEEPING_INTERVAL=0` disabled the sweeper. | Boot log line `housekeeping sweeper configured` (`enabled`, `idempotency_key_ttl`, `outbox_retention`). | Set positive durations. See [Configuration](./configuration.md#zero-disables-housekeeping). |
 
 ## REST callers
 
