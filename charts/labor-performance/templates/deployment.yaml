@@ -47,6 +47,16 @@ spec:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
+          # D14 (2026-10-12): every key of the chart ConfigMap (HTTP_ADDR,
+          # LOG_LEVEL, ENVIRONMENT, KAFKA_CONSUMER_GROUP, CORS_ALLOWED_ORIGINS,
+          # OTEL_*, KAFKA_BROKERS) is read by cmd/labor and reaches it through
+          # envFrom. The explicit `env` entries below win over envFrom for the
+          # same key and carry the same values, so nothing changes for the
+          # variables already set here; the checksum/config annotation rolls
+          # the pods when the ConfigMap changes.
+          envFrom:
+            - configMapRef:
+                name: {{ include "labor-performance.fullname" . }}
           env:
             - name: HTTP_ADDR
               value: {{ .Values.config.httpAddr | quote }}
@@ -70,6 +80,10 @@ spec:
               value: {{ .Values.config.eventPublisher | quote }}
             - name: OUTBOX_RELAY_INTERVAL
               value: {{ .Values.config.outboxRelayInterval | quote }}
+            # ADR 0032: failed sends after which an outbox row is no longer
+            # claimed (0 = unlimited).
+            - name: OUTBOX_MAX_ATTEMPTS
+              value: {{ .Values.config.outboxMaxAttempts | quote }}
             - name: HOUSEKEEPING_INTERVAL
               value: {{ .Values.config.housekeepingInterval | quote }}
             - name: IDEMPOTENCY_KEY_TTL

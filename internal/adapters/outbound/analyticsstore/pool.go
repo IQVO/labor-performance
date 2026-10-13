@@ -70,7 +70,9 @@ func NewPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 // ReportsStatementTimeout applied. The reader process (cmd/labor-reports)
 // uses this so a bug there cannot mutate the read model even if the
 // database role itself is not read-only -- defence in depth on top of the
-// read-only ANALYTICS_READER_DATABASE_URL role (ADR-0007).
+// read-only role cmd/labor-reports connects with through its
+// ANALYTICS_DATABASE_URL env var (the chart fills that env var from the
+// Secret key ANALYTICS_READER_DATABASE_URL; ADR-0007).
 func NewReadOnlyPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	return newPoolWithLimits(ctx, databaseURL, ReportsMaxConns, ReportsStatementTimeout, true)
 }
