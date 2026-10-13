@@ -39,10 +39,11 @@ spec:
           env:
             - name: MCP_ADDR
               value: {{ .Values.mcp.httpAddr | quote }}
-            # cmd/mcp runs the same three read use cases (GetAssociateScorecard,
-            # GetTaskTypePerformance, GetStandard) over the same OLTP database as
-            # cmd/labor, and (like it) applies migrations on start — idempotent,
-            # so both binaries may point at the same directory.
+            # cmd/mcp runs the same four read use cases (GetAssociateScorecard,
+            # GetTaskTypePerformance, GetStandard, GetUtilization) over the same
+            # OLTP database as cmd/labor, and (like it) applies migrations on
+            # start — idempotent, so both binaries may point at the same
+            # directory.
             - name: MIGRATIONS_PATH
               value: {{ .Values.config.migrationsPath | quote }}
             - name: LOG_LEVEL
@@ -78,28 +79,31 @@ spec:
             {{- range .Values.mcp.extraEnv }}
             - {{ toYaml . | nindent 14 | trim }}
             {{- end }}
-          # cmd/mcp mounts the MCP Streamable HTTP handler directly as the root
-          # handler with no separate /healthz route (unlike the OLTP REST
-          # service and the reports reader), so the probes use a TCP socket
-          # check on the port rather than an HTTP path.
+          # cmd/mcp serves GET /healthz (200 {"status":"ok"}) next to the MCP
+          # Streamable HTTP endpoint at "/" (cmd/mcp/main.go newRouter), so the
+          # probes use httpGet /healthz like the OLTP REST service and the
+          # reports reader (gap fix D24). /healthz needs no credentials: MCP is
+          # unauthenticated by decision (ADR-0012). It answers only once
+          # migrations and the database ping have succeeded, because the
+          # listener starts after them.
           # startupProbe covers this fleet's known ~10s post-start
           # first-outbound-dial reset (Istio native sidecars); see
           # values.yaml's startupProbe comment for the full rationale.
-          # tcpSocket, not httpGet, matching the liveness/readiness probes
-          # just below: this binary mounts the MCP Streamable HTTP handler
-          # directly with no separate /healthz route.
           startupProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: http
             periodSeconds: 2
             failureThreshold: 30
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: http
             initialDelaySeconds: 3
             periodSeconds: 5

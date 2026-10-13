@@ -51,7 +51,7 @@ Source: `charts/labor-performance/templates/*.yaml`, `cmd/*/main.go`.
 | OLTP API (`cmd/labor`) | `<fullname>`, `component=api` | always | image entrypoint `./labor` | `http` 8080 (`service.targetPort`) | `<fullname>` ClusterIP, port 80 → `http` | startup `GET /healthz` (every 2s, 30 failures allowed), liveness `GET /healthz`, readiness `GET /readyz` |
 | Analytics projector (`cmd/labor-projector`) | `<fullname>-projector`, `component=analytics-projector` | `analytics.enabled=true` | `/app/labor-projector` | `admin` 8091 (hard-coded in the template) | none | startup, liveness and readiness all `GET /healthz` on `admin` |
 | Reports reader (`cmd/labor-reports`) | `<fullname>-reports`, `component=analytics-reports` | `analytics.enabled=true` | `/app/labor-reports` | `http` 8092 | `<fullname>-reports` ClusterIP, port 80 → `http` | startup, liveness and readiness all `GET /healthz` |
-| MCP server (`cmd/mcp`) | `<fullname>-mcp`, `component=mcp` | `mcp.enabled=true` | `/app/mcp` | `http` 8090 | `<fullname>-mcp` ClusterIP, port 8090 → `http` | `tcpSocket` for startup, liveness and readiness |
+| MCP server (`cmd/mcp`) | `<fullname>-mcp`, `component=mcp` | `mcp.enabled=true` | `/app/mcp` | `http` 8090 | `<fullname>-mcp` ClusterIP, port 8090 → `http` | startup, liveness and readiness all `GET /healthz` |
 | Operator remote (`web/`, `labor_mfe`) | `<fullname>-frontend`, `component=frontend` | `frontend.enabled=true` | nginx-unprivileged | 8080 | `<fullname>-frontend` ClusterIP, port 80 | see the chart |
 
 `charts/labor-performance/tests/test_service_selectors.py` asserts that
@@ -81,9 +81,9 @@ in this chart.
   30). That leaves room for the boot retry to outlast the fleet's known
   ~10s first-dial reset from Istio native sidecars
   ([ADR 0027](../adr/0027-bootretry-and-startup-probe.md)).
-- `cmd/mcp` now has its own `GET /healthz`, but the chart still probes
-  the MCP pod with `tcpSocket`. The template comment saying there is no
-  `/healthz` route is out of date.
+- `cmd/mcp` serves `GET /healthz` next to the MCP endpoint at `/`, and the
+  chart probes the MCP pod with `httpGet /healthz` for startup, liveness and
+  readiness (gap fix D24; it used to be `tcpSocket`).
 
 ### Graceful shutdown (`cmd/labor`)
 
@@ -318,7 +318,9 @@ Release names below assume `labor-performance` in namespace
 ### Restart after a secret or credential rotation
 
 Env vars are read once at process start, and the pod template only has a
-checksum for the ConfigMap, not for the Secrets. After rotating
+checksum for the ConfigMap, not for the Secrets. (The api Deployment
+mounts that ConfigMap with `envFrom`, so a ConfigMap change rolls the api
+pods by itself.) After rotating
 `DATABASE_URL`, `MIGRATIONS_DATABASE_URL`, `ANALYTICS_DATABASE_URL` or
 `ANALYTICS_READER_DATABASE_URL`, restart the affected Deployments:
 

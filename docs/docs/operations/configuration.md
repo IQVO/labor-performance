@@ -31,7 +31,11 @@ How values are parsed:
   without trimming spaces, so write them without spaces.
 
 The Helm chart column shows the `charts/labor-performance/values.yaml` key
-that sets the variable. "—" means the chart never sets it, so the binary
+that sets the variable. The api Deployment (`cmd/labor`) also mounts the
+chart ConfigMap (`HTTP_ADDR`, `LOG_LEVEL`, `ENVIRONMENT`,
+`KAFKA_CONSUMER_GROUP`, `CORS_ALLOWED_ORIGINS`, `OTEL_*`, `KAFKA_BROKERS`)
+with `envFrom`; an explicit `env` entry with the same name wins. The mcp,
+projector and reports Deployments do not mount it. "—" means the chart never sets it, so the binary
 default applies unless you add it through `extraEnv` (api) or
 `mcp.extraEnv` (mcp).
 

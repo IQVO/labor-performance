@@ -194,20 +194,30 @@ A separate feature file,
 | `docs-api-drift` | In `docs/`: `npm ci`, `npm run clean-api-docs:all && npm run gen-api-docs:all`, then fails on any diff under `docs/api-reference/rest` or `rest-reports` | push/PR |
 | `web` | In `web/`: builds `IQVO/warehouse-ui-kit@develop`, then `npm ci`, `npm run lint`, `npx tsc -b`, `npm test` (vitest), `npm run build` | push/PR |
 | `drift` | deadcode, `go mod tidy -diff`, knip on `web/`, and a coverage-quality cross-check (`scripts/coverage-quality.py`). Advisory. | schedule / dispatch |
+| `chart-tests` | `render_test.sh`, `render-assertions.sh` and `test_service_selectors.py` under `charts/labor-performance/tests/` (`make chart-test`) | push/PR |
 | `helm-lint` | `ct lint --charts charts/labor-performance` | PRs into `main` only |
 | `trivy-scan` | Builds the image and gates on CRITICAL/HIGH CVEs that have a fix | PRs into `main` only |
 | `docker-publish`, `release` | GHCR image (cosign-signed, SPDX SBOM), git tag, Helm chart to `oci://ghcr.io/iqvo` | push to `main` only |
 
 Separate workflows: `codeql.yml` (CodeQL), `scorecard.yml` (OpenSSF
-Scorecard), `ai-review.yml`, and `docs.yml`, which builds and deploys
-this site to GitHub Pages on pushes to `main` only. **No PR job builds the
-Docusaurus site.** Run `npm run build` in `docs/` yourself before merging
-docs changes.
+Scorecard), `ai-review.yml`, and `docs.yml`. `docs.yml` builds the
+Docusaurus site on every pull request that touches `docs/**`, `apis/**` or
+the workflow itself (build only, nothing is published), and builds and
+deploys it to GitHub Pages on pushes to `main` (gap fix D25).
 
-Chart checks that are not wired into CI:
-`python3 charts/labor-performance/tests/test_service_selectors.py` (every
-Service selects exactly one component) and
-`charts/labor-performance/tests/render-assertions.sh`.
+Chart tests run in the `chart-tests` CI job on every push and PR
+(`make chart-test` locally; needs `helm` and Python 3 with PyYAML):
+
+- `charts/labor-performance/tests/render_test.sh`: the api Deployment
+  mounts the chart ConfigMap with `envFrom` (gap fix D14), the
+  `OUTBOX_MAX_ATTEMPTS` default and `0`, a `0s` housekeeping interval, the
+  MCP probes are `httpGet /healthz` (D24), and no other workload mounts
+  the api ConfigMap;
+- `charts/labor-performance/tests/render-assertions.sh`: the frontend
+  workload is off by default, ClusterIP and never publicly exposed;
+- `charts/labor-performance/tests/test_service_selectors.py`: every
+  Service selects exactly one component. It fails (no longer skips) when
+  PyYAML is missing.
 
 ## Git hooks
 
