@@ -478,11 +478,7 @@ func TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes(t *te
 			t.Fatalf("pass %d: ERROR logged before the cap was reached: %s", pass, logs.String())
 		}
 	}
-	for _, want := range []string{`"outbox_id":` + strconv.FormatInt(poisonID, 10), `"topic":"warehouse.poison"`, `"event_type":"com.example.Poison"`, `"key":"assoc-poison"`, `"level":"ERROR"`} {
-		if !strings.Contains(logs.String(), want) {
-			t.Fatalf("cap log misses %s: %s", want, logs.String())
-		}
-	}
+	assertCapLog(t, logs.String(), poisonID)
 
 	n, err := relay.RelayOnce(ctx)
 	if err != nil || n != 1 {
@@ -492,16 +488,7 @@ func TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes(t *te
 		t.Fatalf("expected only the good row sent, got %v", sink.sent)
 	}
 
-	var attempts int
-	var lastErr string
-	var published bool
-	if err := pool.QueryRow(ctx, `SELECT attempts, coalesce(last_error, ''), published_at IS NOT NULL FROM outbox_events WHERE id = $1`, poisonID).
-		Scan(&attempts, &lastErr, &published); err != nil {
-		t.Fatalf("read poison row: %v", err)
-	}
-	if attempts != 3 || lastErr == "" || published {
-		t.Fatalf("poison row must stay for inspection: attempts=%d last_error=%q published=%v", attempts, lastErr, published)
-	}
+	assertPoisonRowKept(t, pool, poisonID, 3)
 
 	// Re-arming the row (the runbook SQL) makes the relay claim it again.
 	if _, err := pool.Exec(ctx, `UPDATE outbox_events SET attempts = 0 WHERE id = $1`, poisonID); err != nil {
@@ -509,6 +496,33 @@ func TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes(t *te
 	}
 	if _, err := relay.RelayOnce(ctx); err == nil {
 		t.Fatal("a re-armed row must be claimed (and fail) again")
+	}
+}
+
+// assertCapLog checks the single ERROR line the relay writes when a row
+// reaches the attempt cap names the row's id, topic, type and key.
+func assertCapLog(t *testing.T, logs string, poisonID int64) {
+	t.Helper()
+	for _, want := range []string{`"outbox_id":` + strconv.FormatInt(poisonID, 10), `"topic":"warehouse.poison"`, `"event_type":"com.example.Poison"`, `"key":"assoc-poison"`, `"level":"ERROR"`} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("cap log misses %s: %s", want, logs)
+		}
+	}
+}
+
+// assertPoisonRowKept checks an excluded row stays unpublished in
+// outbox_events with its attempts and last_error, for inspection.
+func assertPoisonRowKept(t *testing.T, pool *pgxpool.Pool, id int64, wantAttempts int) {
+	t.Helper()
+	var attempts int
+	var lastErr string
+	var published bool
+	if err := pool.QueryRow(context.Background(), `SELECT attempts, coalesce(last_error, ''), published_at IS NOT NULL FROM outbox_events WHERE id = $1`, id).
+		Scan(&attempts, &lastErr, &published); err != nil {
+		t.Fatalf("read poison row: %v", err)
+	}
+	if attempts != wantAttempts || lastErr == "" || published {
+		t.Fatalf("poison row must stay for inspection: attempts=%d last_error=%q published=%v", attempts, lastErr, published)
 	}
 }
 

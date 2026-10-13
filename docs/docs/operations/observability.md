@@ -77,6 +77,16 @@ not of the relay pass. A consume span is a child of the producer span
 found in the message headers, so a `TaskCompleted` from
 `fulfillment-execution` keeps its upstream trace.
 
+Two integration tests (real Postgres and Kafka through testcontainers,
+`internal/adapters/outbound/postgres/outbox_trace_kafka_integration_test.go`,
+gap fix D27) pin this: `TestOutboxTrace_TraceparentCrossesTheOutboxToKafka`
+proves a request span's `traceparent` is stored on the outbox row, sent as
+a Kafka header by a relay pass running on a background context, and
+extracted by a consumer as the request span; and
+`TestOutboxTrace_RowWithoutTraceHeadersRelaysUnchanged` proves a row with
+no stored trace context relays unchanged and without any
+`traceparent`/`tracestate` header.
+
 ## Logs
 
 Every binary logs JSON to stdout through `slog.NewJSONHandler`, wrapped

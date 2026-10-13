@@ -88,9 +88,11 @@ A separate feature file,
 - **Narrow target:** `make integration-kafka-testcontainers` runs
   `TestConsumer_ProjectsRealBrokerMessages` against an isolated Kafka
   container.
-- **Files** (all `//go:build integration`, 16 in total):
+- **Files** (all `//go:build integration`, 19 in total; besides the ones
+  below, `internal/application/usecases/usecases_wiring_integration_test.go`
+  and `internal/adapters/inbound/mcp/streamable_http_integration_test.go`):
   - Postgres repos: `internal/adapters/outbound/postgres/{integration,standard_repo,performance_repo,idle_period_repo}_integration_test.go`
-  - outbox and relay: `outbox_integration_test.go` (including the attempt cap of [ADR 0032](../adr/0032-outbox-relay-attempt-cap.md): `TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes`, `TestOutboxRelay_WithoutMaxAttempts_RetriesWithoutBound`), `outbox_lag_integration_test.go`
+  - outbox and relay: `outbox_integration_test.go` (including the attempt cap of [ADR 0032](../adr/0032-outbox-relay-attempt-cap.md): `TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes`, `TestOutboxRelay_WithoutMaxAttempts_RetriesWithoutBound`), `outbox_lag_integration_test.go`, and trace continuity across the outbox to a real broker (`outbox_trace_kafka_integration_test.go`: `TestOutboxTrace_TraceparentCrossesTheOutboxToKafka`, `TestOutboxTrace_RowWithoutTraceHeadersRelaysUnchanged`)
   - sweeper: `sweeper_integration_test.go`
   - pool limits (`statement_timeout` really applied): `pool_limits_integration_test.go`
   - analytics store: `internal/adapters/outbound/analyticsstore/postgres_integration_test.go`
