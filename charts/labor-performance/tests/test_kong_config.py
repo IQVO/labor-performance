@@ -51,7 +51,6 @@ ENABLE_KONG = [
     "--set", "mcp.route.parentRefs[0].name=warehouse-gateway",
     "--set", "mcp.route.parentRefs[0].namespace=kong",
     "--set", "analytics.enabled=true",
-    "--set", "analytics.reports.enabled=true",
     "--set", "analytics.reports.route.enabled=true",
     "--set", "analytics.reports.route.parentRefs[0].name=warehouse-gateway",
     "--set", "analytics.reports.route.parentRefs[0].namespace=kong",
