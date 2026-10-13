@@ -5,6 +5,10 @@ metadata:
   name: {{ include "labor-performance.fullname" . }}
   labels:
     {{- include "labor-performance.labels" . | nindent 4 }}
+  {{- with include "labor-performance.kongPluginNames" . }}
+  annotations:
+    konghq.com/plugins: {{ . | quote }}
+  {{- end }}
 spec:
   parentRefs:
     {{- range .Values.gatewayApi.parentRefs }}
