@@ -17,10 +17,10 @@ type (`internal/adapters/kafka/cloudevents/cloudevents.go`).
 
 ## Canvas at a glance
 
-One picture of the sections below, laid out like the ddd-crew canvas:
-inbound collaborators on the left, this context in the middle (purpose,
-domain roles and the business decisions it enforces), outbound
-collaborators on the right. Arrows follow the message type: **solid blue**
+Two pictures of the sections below, laid out like the ddd-crew canvas:
+first the inbound collaborators feeding this context (purpose, domain roles
+and the business decisions it enforces), then the outbound collaborators it
+calls or notifies. Arrows follow the message type: **solid blue**
 commands (`cmd`), **dotted green** queries (`qry`), **thick orange** events
 (`evt`); each arrow names its channel and the messages it carries. Box shapes
 mark the collaborator kind: rounded = people, UI or any client; blue =
@@ -31,8 +31,10 @@ abbreviated (REST, MCP, Kafka, HTTP, port); the Inbound and Outbound
 Communication tables carry the exact route, tool, topic and CloudEvents
 type for every message.
 
+### Inbound
+
 ```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 18, "rankSpacing": 36, "padding": 8}}}%%
+%%{init: {"flowchart": {"nodeSpacing": 14, "rankSpacing": 40, "padding": 6}}}%%
 flowchart LR
     classDef bc fill:#fff3bf,stroke:#e67700,stroke-width:1.5px,color:#000
     classDef card fill:#fff9db,stroke:#f08c00,color:#000,text-align:left
@@ -43,23 +45,17 @@ flowchart LR
     classDef none fill:#f8f9fa,stroke:#adb5bd,stroke-dasharray:5 5,color:#495057
     subgraph IN["Inbound - who commands, queries or feeds it"]
         direction TB
-        in0(["Operator via warehouse-console (labor_mfe) or any REST client"]):::actor
-        in1["workforce-management (http mode)"]:::ctx
+        in0(["Operator via<br/>warehouse-console<br/>(labor_mfe) or any REST<br/>client"]):::actor
+        in1["workforce-management (http<br/>mode)"]:::ctx
         in2["warehouse-ops-agent"]:::ctx
         in3["fulfillment-execution"]:::ctx
     end
     subgraph BC["labor-performance - Supporting subdomain - WES tier"]
         direction TB
-        purpose["<b>Purpose</b><br/>Tell the warehouse how long each<br/>kind of task should take and how<br/>long it actually took: engineered<br/>standards per TaskType, scoring of<br/>every completed task, idle gaps,<br/>scorecards, task-type performance<br/>and utilization. Visibility, never<br/>enforcement."]:::card
-        roles["<b>Domain roles</b><br/>- Analysis context (primary)<br/>- Specification context (the labor standard)<br/>- Downstream observer: no command path back, calls no sibling"]:::card
-        rules["<b>Business decisions it enforces</b><br/>- A revision closes the prior<br/>standard; one open standard per<br/>TaskType<br/>- Score against the standard in force<br/>at completion time; the value is<br/>frozen<br/>- No number is fabricated: unscorable<br/>rows yield null, never 0<br/>- Unknown task types and empty<br/>associates are recorded, not<br/>rejected<br/>- Idle gaps are capped and flagged;<br/>out-of-order gaps are skipped<br/>- The coaching flag is a signal for a<br/>human, never an action"]:::card
+        purpose["<b>Purpose</b><br/>Tell the warehouse how long each kind of task should take<br/>and how long it actually took: engineered standards per<br/>TaskType, scoring of every completed task, idle gaps,<br/>scorecards, task-type performance and utilization.<br/>Visibility, never enforcement."]:::card
+        roles["<b>Domain roles</b><br/>- Analysis context (primary)<br/>- Specification context (the labor standard)<br/>- Downstream observer: no command path back, calls no<br/>sibling"]:::card
+        rules["<b>Business decisions it enforces</b><br/>- A revision closes the prior standard; one open standard<br/>per TaskType<br/>- Score against the standard in force at completion time;<br/>the value is frozen<br/>- No number is fabricated: unscorable rows yield null, never<br/>0<br/>- Unknown task types and empty associates are recorded, not<br/>rejected<br/>- Idle gaps are capped and flagged; out-of-order gaps are<br/>skipped<br/>- The coaching flag is a signal for a human, never an action"]:::card
         purpose ~~~ roles ~~~ rules
-    end
-    subgraph OUT["Outbound - whom it calls or notifies"]
-        direction TB
-        out0["workforce-management"]:::ctx
-        out1["own cmd/labor-projector"]:::self
-        out2["operations (dead letter, no consumer)"]:::self
     end
     in0 -->|"cmd - REST<br/>DefineStandard"| BC
     in0 -.->|"qry - REST<br/>GetAssociateScorecard,<br/>GetTaskTypePerformance,<br/>GetStandard, GetUtilization<br/>(task type, associate)"| BC
@@ -68,9 +64,6 @@ flowchart LR
     in2 -.->|"qry - MCP<br/>get_associate_scorecard,<br/>get_task_type_performance,<br/>get_labor_standard,<br/>get_task_type_utilization"| BC
     in2 -.->|"qry - REST (reports)<br/>Labor Performance Report,<br/>freshness"| BC
     in3 ==>|"evt - Kafka<br/>warehouse.fulfillment.events<br/>TaskCompleted"| BC
-    BC ==>|"evt - Kafka<br/>warehouse.labor-performance.events<br/>TaskPerformanceRecorded"| out0
-    BC ==>|"evt - Kafka<br/>warehouse.labor-performance.analytics<br/>LaborStandardDefined,<br/>LaborStandardRevised,<br/>TaskPerformanceRecorded"| out1
-    BC ==>|"evt - Kafka<br/>warehouse.fulfillment.events.dlq<br/>undecodable or repeatedly<br/>failing TaskCompleted"| out2
     linkStyle 0 stroke:#1971c2,stroke-width:1.5px
     linkStyle 1 stroke:#2f9e44,stroke-width:1.5px
     linkStyle 2 stroke:#2f9e44,stroke-width:1.5px
@@ -78,10 +71,34 @@ flowchart LR
     linkStyle 4 stroke:#2f9e44,stroke-width:1.5px
     linkStyle 5 stroke:#2f9e44,stroke-width:1.5px
     linkStyle 6 stroke:#e8590c,stroke-width:2.5px
-    linkStyle 7 stroke:#e8590c,stroke-width:2.5px
-    linkStyle 8 stroke:#e8590c,stroke-width:2.5px
-    linkStyle 9 stroke:#e8590c,stroke-width:2.5px
     class BC bc
+```
+
+### Outbound
+
+```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 14, "rankSpacing": 40, "padding": 6}}}%%
+flowchart LR
+    classDef bc fill:#fff3bf,stroke:#e67700,stroke-width:1.5px,color:#000
+    classDef card fill:#fff9db,stroke:#f08c00,color:#000,text-align:left
+    classDef ctx fill:#e7f5ff,stroke:#1c7ed6,color:#000
+    classDef actor fill:#fff4e6,stroke:#e8590c,color:#000
+    classDef ext fill:#ffe3e3,stroke:#c92a2a,color:#000
+    classDef self fill:#f1f3f5,stroke:#868e96,color:#000
+    classDef none fill:#f8f9fa,stroke:#adb5bd,stroke-dasharray:5 5,color:#495057
+    BC["<b>labor-performance - Supporting subdomain - WES tier</b>"]:::bc
+    subgraph OUT["Outbound - whom it calls or notifies"]
+        direction TB
+        out0["workforce-management"]:::ctx
+        out1["own cmd/labor-projector"]:::self
+        out2["operations (dead letter,<br/>no consumer)"]:::self
+    end
+    BC ==>|"evt - Kafka<br/>warehouse.labor-performance.events<br/>TaskPerformanceRecorded"| out0
+    BC ==>|"evt - Kafka<br/>warehouse.labor-performance.analytics<br/>LaborStandardDefined,<br/>LaborStandardRevised,<br/>TaskPerformanceRecorded"| out1
+    BC ==>|"evt - Kafka<br/>warehouse.fulfillment.events.dlq<br/>undecodable or repeatedly<br/>failing TaskCompleted"| out2
+    linkStyle 0 stroke:#e8590c,stroke-width:2.5px
+    linkStyle 1 stroke:#e8590c,stroke-width:2.5px
+    linkStyle 2 stroke:#e8590c,stroke-width:2.5px
 ```
 
 Source: the Inbound Communication and Outbound Communication tables of this
