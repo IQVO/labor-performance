@@ -72,7 +72,7 @@ in this chart.
   Postgres or Kafka either.
 - Boot order is what makes a successful probe meaningful. Each binary runs
   its migrations and pings its pool (both retried by `bootretry`: 5
-  attempts, about 31s) **before** it starts listening. If any of that
+  attempts, 1+2+4+8 = 15s of backoff plus the attempts themselves) **before** it starts listening. If any of that
   fails, the process exits non-zero instead of serving. So once a pod
   answers its probes, migrations have been applied and the database was
   reachable at boot. Kafka is never checked: the consumer and relay start
@@ -221,8 +221,10 @@ then every `HOUSEKEEPING_INTERVAL`, and deletes in batches of 1000:
 It logs `housekeeping sweep` with `idempotency_keys_deleted` and
 `outbox_events_deleted` when it deletes anything, and
 `housekeeping sweep failed` on error. Several replicas can run it at
-once safely. `0` does **not** disable it (see
-[Configuration](./configuration.md#zero-does-not-disable-housekeeping)).
+once safely. At boot it logs `housekeeping sweeper configured` with the
+values in effect. `HOUSEKEEPING_INTERVAL=0` disables it, and a `0`
+`IDEMPOTENCY_KEY_TTL` or `OUTBOX_RETENTION` keeps that table's rows
+forever (see [Configuration](./configuration.md#zero-disables-housekeeping)).
 
 ## Reports API (`cmd/labor-reports`)
 

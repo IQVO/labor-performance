@@ -21,7 +21,7 @@ All REST errors are RFC 7807 `application/problem+json` bodies with
 
 | Symptom | Cause | Check | Fix |
 | --- | --- | --- | --- |
-| Pod in `CrashLoopBackOff`. The last log line is `service exited with error` with `run migrations (after 5 attempts): …` | The OLTP database is unreachable, the DSN is wrong, or a migration failed. Boot retry gives up after about 31s. | `kubectl logs --previous` and look for `retrying op="run migrations"` lines. Try the DSN with `psql`. | Fix the Secret (`DATABASE_URL`, `MIGRATIONS_DATABASE_URL`) or the network, then `kubectl rollout restart`. |
+| Pod in `CrashLoopBackOff`. The last log line is `service exited with error` with `run migrations (after 5 attempts): …` | The OLTP database is unreachable, the DSN is wrong, or a migration failed. Boot retry gives up after 5 attempts (1+2+4+8 = 15s of backoff plus the attempts themselves). | `kubectl logs --previous` and look for `retrying op="run migrations"` lines. Try the DSN with `psql`. | Fix the Secret (`DATABASE_URL`, `MIGRATIONS_DATABASE_URL`) or the network, then `kubectl rollout restart`. |
 | Migrations fail intermittently on rollout with `unnamed prepared statement does not exist` or `canceling statement due to statement timeout` | `MIGRATIONS_DATABASE_URL` is unset, so migrations go through PgBouncer transaction pooling and golang-migrate's advisory lock does not hold ([ADR 0020](../adr/0020-migrations-direct-postgres-connection.md)). | `kubectl exec … env \| grep MIGRATIONS_DATABASE_URL` | Add the `MIGRATIONS_DATABASE_URL` key (direct DSN) to the database Secret. |
 | Boot fails with `Dirty database version N. Fix and force version.` | An earlier migration failed halfway and golang-migrate marked `schema_migrations` dirty. | `SELECT version, dirty FROM schema_migrations;` | Repair the schema by hand, then `migrate -path migrations -database "$MIGRATIONS_DATABASE_URL" force <N>`. |
 | `labor-projector` or `labor-reports` exits immediately with `ANALYTICS_DATABASE_URL is required` | `analytics.enabled=true` but neither `analytics.database.projectorUrl` nor `analytics.database.existingSecret` is set, so the chart rendered no Secret. | `kubectl get secret` for the analytics Secret. | Set the analytics DSN values or the existing Secret. |
@@ -51,7 +51,7 @@ All REST errors are RFC 7807 `application/problem+json` bodies with
 | `GET /reports/performance/freshness` → `lagSeconds` keeps growing | The projector is down or stuck retrying a transient DB error (`analytics message handling failed; retrying`). It retries forever and never skips. | Projector logs, and group `labor-performance-analytics` lag. | Fix the analytical DB. If the read model is corrupt, rebuild it ([Runbook](./runbook.md#rebuild-the-analytical-read-model)). |
 | Report shows `meanEfficiencyPct: null` beside `tasksRecorded > 0` | Every task in the bucket was unscorable. | `tasksScored` is 0. | Expected. Null is never shown as 0%. |
 | Report with `taskType=pick` returns empty rows | The rollup key is normalised to upper case and the reader compares exactly. | Repeat with `taskType=PICK`. | Send the task type in upper case. |
-| Old `outbox_events` or `idempotency_keys` rows never go away after setting the TTL or retention to `0` | `durationEnv` turns `0` back into the default. A `0` never disables the sweep. | — | See [Configuration](./configuration.md#zero-does-not-disable-housekeeping). |
+| Old `outbox_events` or `idempotency_keys` rows never go away | The TTL or retention is `0` (or negative), which keeps rows forever, or `HOUSEKEEPING_INTERVAL=0` disabled the sweeper. | Boot log line `housekeeping sweeper configured` (`enabled`, `idempotency_key_ttl`, `outbox_retention`). | Set positive durations. See [Configuration](./configuration.md#zero-disables-housekeeping). |
 
 ## REST callers
 
@@ -81,7 +81,6 @@ MCP calls, so nothing can trip one.
 | Clients get "session not found" or are re-initialised intermittently | `mcp.replicaCount > 1`. The go-sdk Streamable HTTP sessions live in memory and the Service has no session affinity. | Keep one replica. |
 | A tool returns an error such as `associateId is required` or `unknown task type…` | Input validation in `internal/adapters/inbound/mcp/tools.go`. The error is recorded on the `mcp.tool <name>` span. | Fix the arguments. See [MCP tools](../mcp/tools.md). |
 | Every tool returns not-found or empty data | `DATABASE_URL` is unset on the MCP Deployment, so it uses its own empty in-memory repositories. | Point it at the same OLTP Secret as the api. |
-| `LOG_LEVEL=DEBUG` has no effect on `cmd/mcp` | Its level parser is case-sensitive. | Use `debug`. |
 
 ## Problem types
 

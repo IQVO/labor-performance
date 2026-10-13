@@ -288,7 +288,7 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 | `KAFKA_CONSUMER_GROUP` | `labor-performance` | Consumer group id on `warehouse.fulfillment.events`. |
 | `EVENT_PUBLISHER` | `log` | `log` or `kafka`. With `kafka`, domain events are fanned onto `warehouse.labor-performance.analytics` and `warehouse.labor-performance.events` (ADR 0013); when `DATABASE_URL` is also set they go through the transactional outbox (`outbox_events` + in-process relay, [ADR 0010](docs/docs/adr/0010-transactional-outbox.md)), otherwise straight to the broker. |
 | `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration; only used in outbox mode). |
-| `HOUSEKEEPING_INTERVAL` | `1h` | How often the housekeeping sweeper runs ([ADR 0023](docs/docs/adr/0023-housekeeping-sweeper.md)); only with `DATABASE_URL`. |
+| `HOUSEKEEPING_INTERVAL` | `1h` | How often the housekeeping sweeper runs ([ADR 0023](docs/docs/adr/0023-housekeeping-sweeper.md)); only with `DATABASE_URL`. `0` disables it (a `0` TTL/retention below keeps those rows forever). |
 | `IDEMPOTENCY_KEY_TTL` | `24h` | Age after which `idempotency_keys` rows are swept (ADR 0016/0023). |
 | `OUTBOX_RETENTION` | `168h` (7d) | Age after which PUBLISHED `outbox_events` rows are swept; unpublished rows are never swept. |
 | `IDLE_GAP_CAP_SECONDS` | `3600` | Upper bound on a recorded idle gap (a capped gap is stored with `capped: true`); malformed/non-positive values fall back to the default ([ADR 0014](docs/docs/adr/0014-labor-utilization-idleness.md)). |
@@ -297,7 +297,7 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | OTLP/gRPC Collector endpoint. |
 | `SERVICE_VERSION` | `dev` | OTel `service.version` (overridden by `-ldflags -X main.version`). |
 | `ENVIRONMENT` | `local` | OTel `deployment.environment.name` resource attribute. |
-| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error`. |
+| `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` (or `warning`) \| `error`, case-insensitive in every binary. |
 
 The other binaries read the same `LOG_LEVEL`/`OTEL_EXPORTER_OTLP_ENDPOINT`/`SERVICE_VERSION` set
 (their `OTEL_SERVICE_NAME` defaults are `labor-performance-projector`,
