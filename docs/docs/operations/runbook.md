@@ -72,7 +72,7 @@ in this chart.
   Postgres or Kafka either.
 - Boot order is what makes a successful probe meaningful. Each binary runs
   its migrations and pings its pool (both retried by `bootretry`: 5
-  attempts, about 31s) **before** it starts listening. If any of that
+  attempts, 1+2+4+8 = 15s of backoff plus the attempts themselves) **before** it starts listening. If any of that
   fails, the process exits non-zero instead of serving. So once a pod
   answers its probes, migrations have been applied and the database was
   reachable at boot. Kafka is never checked: the consumer and relay start

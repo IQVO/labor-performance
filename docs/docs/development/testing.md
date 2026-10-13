@@ -173,6 +173,7 @@ A separate feature file,
 | `TestCloudEventsOnly` | Kafka code uses the CloudEvents SDK (no hand-built envelopes), and nothing mentions the retired `EVENT_ENVELOPE_MODE` toggle. |
 | `TestReplayConsumersSetCommitInterval` | A full-replay consumer whose group id comes from a "unique group" function call must set `CommitInterval`. |
 | `TestEventCatalogueMatchesContract`, `TestEventCatalogueDetector` | Every CloudEvents `type` that `apis/asyncapi.yaml` declares for this service also appears in a CloudEvents ADR under `docs/docs/adr/`. |
+| `TestMCPOptionalToolInputsCarryOmitempty` (+ `TestMCPOptionalToolInputsSensorFailsOnBadFixtures`) | An MCP tool input field whose `jsonschema` description says it is optional (the word "optional", or "when/if omitted") carries `omitempty` in its `json` tag. Without it the MCP SDK marks the field required and a call that leaves it out is rejected before the handler runs (gap fix D16). |
 
 ## Other CI jobs
 
