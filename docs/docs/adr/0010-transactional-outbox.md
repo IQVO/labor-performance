@@ -10,7 +10,7 @@ description: "Why this service stopped publishing to Kafka from inside its use c
 
 ## Status
 
-**Accepted** — implemented in the same change that introduced this record.
+**Accepted** — implemented in the same change that introduced this record. Amended by [ADR 0032](./0032-outbox-relay-attempt-cap.md) (relay attempt cap).
 The fleet's reference implementation is `process-path-management` (its
 ADR 0003); this record is `labor-performance` adopting the same pattern,
 adapted to a service whose only outbound topic is the analytics data

@@ -4,6 +4,11 @@ metadata:
   name: {{ include "labor-performance.fullname" . }}
   labels:
     {{- include "labor-performance.labels" . | nindent 4 }}
+# Mounted by the api Deployment (cmd/labor) with `envFrom: configMapRef`
+# (gap fix D14): every key below is read by cmd/labor. Explicit `env`
+# entries in deployment.yaml win over the same key here. The mcp,
+# projector and reports Deployments do NOT mount it: they set their own env
+# (HTTP_ADDR and OTEL_SERVICE_NAME here are the api's values).
 data:
   HTTP_ADDR: {{ .Values.config.httpAddr | quote }}
   LOG_LEVEL: {{ .Values.config.logLevel | quote }}

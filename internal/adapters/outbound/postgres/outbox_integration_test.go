@@ -3,10 +3,12 @@
 package postgres_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -414,5 +416,141 @@ func TestOutboxRelay_Run_DrainsUntilCancelled(t *testing.T) {
 	}
 	if got := countOutbox(t, pool, "published_at IS NULL"); got != 0 {
 		t.Fatalf("expected Run to drain the outbox, %d pending", got)
+	}
+}
+
+// poisonSink fails every send to poisonTopic and records everything else,
+// modelling a row the broker will never accept (an oversized message, a
+// topic that cannot be created) sitting in front of healthy rows.
+type poisonSink struct {
+	poisonTopic string
+	sent        []outboundkafka.Encoded
+}
+
+func (s *poisonSink) Send(_ context.Context, msgs ...outboundkafka.Encoded) error {
+	for _, m := range msgs {
+		if m.Topic == s.poisonTopic {
+			return errors.New("message too large")
+		}
+		s.sent = append(s.sent, m)
+	}
+	return nil
+}
+
+// insertOutboxRow enqueues one raw outbox row and returns its id.
+func insertOutboxRow(t *testing.T, pool *pgxpool.Pool, topic, eventType, key string) int64 {
+	t.Helper()
+	var id int64
+	if err := pool.QueryRow(context.Background(), `
+		INSERT INTO outbox_events (topic, event_type, key, value)
+		VALUES ($1, $2, $3, '{}'::bytea) RETURNING id
+	`, topic, eventType, []byte(key)).Scan(&id); err != nil {
+		t.Fatalf("insert outbox row: %v", err)
+	}
+	return id
+}
+
+// TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes
+// pins ADR 0032 (gap fix D12): a row that fails WithMaxAttempts times is no
+// longer claimed, so the good row queued behind it publishes; the poison
+// row stays in outbox_events with attempts and last_error, and the relay
+// reports it once at ERROR with id, topic, type and key.
+func TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes(t *testing.T) {
+	pool := outboxDB(t)
+	ctx := context.Background()
+
+	poisonID := insertOutboxRow(t, pool, "warehouse.poison", "com.example.Poison", "assoc-poison")
+	insertOutboxRow(t, pool, "warehouse.good", "com.example.Good", "assoc-good")
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelError}))
+	sink := &poisonSink{poisonTopic: "warehouse.poison"}
+	relay := postgres.NewOutboxRelay(pool, sink, logger, postgres.WithMaxAttempts(3))
+
+	for pass := 1; pass <= 3; pass++ {
+		if _, err := relay.RelayOnce(ctx); err == nil {
+			t.Fatalf("pass %d: expected the poison row to fail", pass)
+		}
+		if len(sink.sent) != 0 {
+			t.Fatalf("pass %d: the good row overtook the poison row before the cap: %v", pass, sink.sent)
+		}
+		if pass < 3 && logs.Len() != 0 {
+			t.Fatalf("pass %d: ERROR logged before the cap was reached: %s", pass, logs.String())
+		}
+	}
+	assertCapLog(t, logs.String(), poisonID)
+
+	n, err := relay.RelayOnce(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("after the cap the good row must publish: n=%d err=%v", n, err)
+	}
+	if len(sink.sent) != 1 || sink.sent[0].Topic != "warehouse.good" {
+		t.Fatalf("expected only the good row sent, got %v", sink.sent)
+	}
+
+	assertPoisonRowKept(t, pool, poisonID, 3)
+
+	// Re-arming the row (the runbook SQL) makes the relay claim it again.
+	if _, err := pool.Exec(ctx, `UPDATE outbox_events SET attempts = 0 WHERE id = $1`, poisonID); err != nil {
+		t.Fatalf("re-arm: %v", err)
+	}
+	if _, err := relay.RelayOnce(ctx); err == nil {
+		t.Fatal("a re-armed row must be claimed (and fail) again")
+	}
+}
+
+// assertCapLog checks the single ERROR line the relay writes when a row
+// reaches the attempt cap names the row's id, topic, type and key.
+func assertCapLog(t *testing.T, logs string, poisonID int64) {
+	t.Helper()
+	for _, want := range []string{`"outbox_id":` + strconv.FormatInt(poisonID, 10), `"topic":"warehouse.poison"`, `"event_type":"com.example.Poison"`, `"key":"assoc-poison"`, `"level":"ERROR"`} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("cap log misses %s: %s", want, logs)
+		}
+	}
+}
+
+// assertPoisonRowKept checks an excluded row stays unpublished in
+// outbox_events with its attempts and last_error, for inspection.
+func assertPoisonRowKept(t *testing.T, pool *pgxpool.Pool, id int64, wantAttempts int) {
+	t.Helper()
+	var attempts int
+	var lastErr string
+	var published bool
+	if err := pool.QueryRow(context.Background(), `SELECT attempts, coalesce(last_error, ''), published_at IS NOT NULL FROM outbox_events WHERE id = $1`, id).
+		Scan(&attempts, &lastErr, &published); err != nil {
+		t.Fatalf("read poison row: %v", err)
+	}
+	if attempts != wantAttempts || lastErr == "" || published {
+		t.Fatalf("poison row must stay for inspection: attempts=%d last_error=%q published=%v", attempts, lastErr, published)
+	}
+}
+
+// TestOutboxRelay_WithoutMaxAttempts_RetriesWithoutBound pins the option's
+// zero value (0 = unlimited): the poison row keeps being claimed and keeps
+// blocking the rows behind it.
+func TestOutboxRelay_WithoutMaxAttempts_RetriesWithoutBound(t *testing.T) {
+	pool := outboxDB(t)
+	ctx := context.Background()
+
+	poisonID := insertOutboxRow(t, pool, "warehouse.poison", "com.example.Poison", "assoc-poison")
+	insertOutboxRow(t, pool, "warehouse.good", "com.example.Good", "assoc-good")
+
+	sink := &poisonSink{poisonTopic: "warehouse.poison"}
+	relay := postgres.NewOutboxRelay(pool, sink, slog.Default(), postgres.WithMaxAttempts(0))
+	for pass := 1; pass <= 5; pass++ {
+		if _, err := relay.RelayOnce(ctx); err == nil {
+			t.Fatalf("pass %d: expected the poison row to be claimed and fail", pass)
+		}
+	}
+	if len(sink.sent) != 0 {
+		t.Fatalf("unlimited retries keep the head row blocking, got %v", sink.sent)
+	}
+	var attempts int
+	if err := pool.QueryRow(ctx, `SELECT attempts FROM outbox_events WHERE id = $1`, poisonID).Scan(&attempts); err != nil {
+		t.Fatalf("read poison row: %v", err)
+	}
+	if attempts != 5 {
+		t.Fatalf("attempts = %d, want 5", attempts)
 	}
 }

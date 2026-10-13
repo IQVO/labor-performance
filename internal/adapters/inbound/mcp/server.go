@@ -20,9 +20,14 @@ func NewServer(deps Deps) *mcp.Server {
 		},
 	)
 
-	deps.registerTools(server)
+	toolNames := deps.registerTools(server)
 	deps.registerResources(server)
 	deps.registerPrompts(server)
+
+	// The charter's invocation and denial counters (§9, ADR 0033) live in a
+	// receiving middleware: only there is a call visible that the SDK
+	// refuses before any tool handler runs.
+	server.AddReceivingMiddleware(newToolMetrics(deps.MeterProvider, toolNames).middleware)
 
 	return server
 }

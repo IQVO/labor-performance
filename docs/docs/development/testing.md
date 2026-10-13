@@ -88,9 +88,11 @@ A separate feature file,
 - **Narrow target:** `make integration-kafka-testcontainers` runs
   `TestConsumer_ProjectsRealBrokerMessages` against an isolated Kafka
   container.
-- **Files** (all `//go:build integration`, 16 in total):
+- **Files** (all `//go:build integration`, 19 in total; besides the ones
+  below, `internal/application/usecases/usecases_wiring_integration_test.go`
+  and `internal/adapters/inbound/mcp/streamable_http_integration_test.go`):
   - Postgres repos: `internal/adapters/outbound/postgres/{integration,standard_repo,performance_repo,idle_period_repo}_integration_test.go`
-  - outbox and relay: `outbox_integration_test.go`, `outbox_lag_integration_test.go`
+  - outbox and relay: `outbox_integration_test.go` (including the attempt cap of [ADR 0032](../adr/0032-outbox-relay-attempt-cap.md): `TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes`, `TestOutboxRelay_WithoutMaxAttempts_RetriesWithoutBound`), `outbox_lag_integration_test.go`, and trace continuity across the outbox to a real broker (`outbox_trace_kafka_integration_test.go`: `TestOutboxTrace_TraceparentCrossesTheOutboxToKafka`, `TestOutboxTrace_RowWithoutTraceHeadersRelaysUnchanged`)
   - sweeper: `sweeper_integration_test.go`
   - pool limits (`statement_timeout` really applied): `pool_limits_integration_test.go`
   - analytics store: `internal/adapters/outbound/analyticsstore/postgres_integration_test.go`
@@ -141,6 +143,12 @@ A separate feature file,
 - `governance_test.go` enforces the charter: at most 8 tools, `verb_noun`
   names, annotations and descriptions present
   ([ADR 0030](../adr/0030-mcp-eval-and-governance-gates.md)).
+- `metrics_test.go` pins the charter's invocation and denial counters
+  ([ADR 0033](../adr/0033-mcp-invocation-and-denial-counters.md)):
+  `TestToolMetrics_CountInvocationsByOutcomeAndDenialsByReason` drives the
+  real server over the in-memory transport with an SDK manual metric
+  reader (ok, handler errors, schema denials, an unknown tool),
+  `TestToolMetrics_OtherMethodsAreNotCounted` and `TestClassify`.
 
 ## Mutation testing (gremlins)
 
@@ -173,6 +181,8 @@ A separate feature file,
 | `TestCloudEventsOnly` | Kafka code uses the CloudEvents SDK (no hand-built envelopes), and nothing mentions the retired `EVENT_ENVELOPE_MODE` toggle. |
 | `TestReplayConsumersSetCommitInterval` | A full-replay consumer whose group id comes from a "unique group" function call must set `CommitInterval`. |
 | `TestEventCatalogueMatchesContract`, `TestEventCatalogueDetector` | Every CloudEvents `type` that `apis/asyncapi.yaml` declares for this service also appears in a CloudEvents ADR under `docs/docs/adr/`. |
+| `TestOutboxRelaysPassAttemptCap` (+ `TestOutboxRelayCapSensorFailsOnBadFixtures`) | Every non-test file under `cmd/` that calls `NewOutboxRelay` passes `WithMaxAttempts`, so the relay attempt cap is always explicit ([ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)). |
+| `TestMCPOptionalToolInputsCarryOmitempty` (+ `TestMCPOptionalToolInputsSensorFailsOnBadFixtures`) | An MCP tool input field whose `jsonschema` description says it is optional (the word "optional", or "when/if omitted") carries `omitempty` in its `json` tag. Without it the MCP SDK marks the field required and a call that leaves it out is rejected before the handler runs (gap fix D16). |
 
 ## Other CI jobs
 
@@ -186,20 +196,30 @@ A separate feature file,
 | `docs-api-drift` | In `docs/`: `npm ci`, `npm run clean-api-docs:all && npm run gen-api-docs:all`, then fails on any diff under `docs/api-reference/rest` or `rest-reports` | push/PR |
 | `web` | In `web/`: builds `IQVO/warehouse-ui-kit@develop`, then `npm ci`, `npm run lint`, `npx tsc -b`, `npm test` (vitest), `npm run build` | push/PR |
 | `drift` | deadcode, `go mod tidy -diff`, knip on `web/`, and a coverage-quality cross-check (`scripts/coverage-quality.py`). Advisory. | schedule / dispatch |
+| `chart-tests` | `render_test.sh`, `render-assertions.sh` and `test_service_selectors.py` under `charts/labor-performance/tests/` (`make chart-test`) | push/PR |
 | `helm-lint` | `ct lint --charts charts/labor-performance` | PRs into `main` only |
 | `trivy-scan` | Builds the image and gates on CRITICAL/HIGH CVEs that have a fix | PRs into `main` only |
 | `docker-publish`, `release` | GHCR image (cosign-signed, SPDX SBOM), git tag, Helm chart to `oci://ghcr.io/iqvo` | push to `main` only |
 
 Separate workflows: `codeql.yml` (CodeQL), `scorecard.yml` (OpenSSF
-Scorecard), `ai-review.yml`, and `docs.yml`, which builds and deploys
-this site to GitHub Pages on pushes to `main` only. **No PR job builds the
-Docusaurus site.** Run `npm run build` in `docs/` yourself before merging
-docs changes.
+Scorecard), `ai-review.yml`, and `docs.yml`. `docs.yml` builds the
+Docusaurus site on every pull request that touches `docs/**`, `apis/**` or
+the workflow itself (build only, nothing is published), and builds and
+deploys it to GitHub Pages on pushes to `main` (gap fix D25).
 
-Chart checks that are not wired into CI:
-`python3 charts/labor-performance/tests/test_service_selectors.py` (every
-Service selects exactly one component) and
-`charts/labor-performance/tests/render-assertions.sh`.
+Chart tests run in the `chart-tests` CI job on every push and PR
+(`make chart-test` locally; needs `helm` and Python 3 with PyYAML):
+
+- `charts/labor-performance/tests/render_test.sh`: the api Deployment
+  mounts the chart ConfigMap with `envFrom` (gap fix D14), the
+  `OUTBOX_MAX_ATTEMPTS` default and `0`, a `0s` housekeeping interval, the
+  MCP probes are `httpGet /healthz` (D24), and no other workload mounts
+  the api ConfigMap;
+- `charts/labor-performance/tests/render-assertions.sh`: the frontend
+  workload is off by default, ClusterIP and never publicly exposed;
+- `charts/labor-performance/tests/test_service_selectors.py`: every
+  Service selects exactly one component. It fails (no longer skips) when
+  PyYAML is missing.
 
 ## Git hooks
 

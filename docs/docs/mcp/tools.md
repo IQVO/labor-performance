@@ -35,7 +35,13 @@ from this branch. They match `testdata/tool_registry.golden`.
 Every input schema has `additionalProperties: false`, so unknown
 arguments are rejected (eval E2). Each call runs inside an OTel span
 `mcp.tool <name>` with `mcp.tool.name` and `mcp.tool.outcome`
-(`ok` or `error`).
+(`ok` or `error`). Every `tools/call` also adds one to
+`labor_performance.mcp.tool.invocations` (`outcome` = `ok`, `error` or
+`denied`), and a call the SDK refuses before the handler runs (unknown
+tool, arguments that fail the schema) adds one to
+`labor_performance.mcp.tool.denials` with its `reason`
+([ADR 0033](../adr/0033-mcp-invocation-and-denial-counters.md); see
+[Observability](../operations/observability.md#metrics)).
 
 Interpreting the output:
 

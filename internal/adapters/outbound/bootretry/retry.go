@@ -26,10 +26,12 @@ import (
 	"time"
 )
 
-// BootRetries and BootRetryDelay bound the startup retry budget.
-//
-// ~31s total (1+2+4+8+16), comfortably past the ~10s first-dial reset and
-// still far inside the liveness probe's own tolerance, so a genuinely
+// BootRetries and BootRetryDelay bound the startup retry budget: 5
+// attempts with exponential backoff starting at 1s. The process sleeps
+// only BETWEEN attempts (1+2+4+8 = 15s of backoff; there is no sleep after
+// the last attempt), so the worst case is 15s plus the duration of the
+// five attempts themselves: comfortably past the ~10s first-dial reset and
+// still far inside the startupProbe's own tolerance, so a genuinely
 // unreachable database or broker still fails the pod rather than hanging
 // it.
 const (
@@ -45,7 +47,7 @@ func Retry(ctx context.Context, logger *slog.Logger, what string, op func() erro
 }
 
 // RetryWithDelay is Retry with the base delay injected, so tests can
-// exercise the give-up path without sleeping out the real ~31s budget.
+// exercise the give-up path without sleeping out the real 15s of backoff.
 func RetryWithDelay(ctx context.Context, logger *slog.Logger, what string, base time.Duration, op func() error) error {
 	if logger == nil {
 		logger = slog.Default()

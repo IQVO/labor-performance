@@ -415,6 +415,38 @@ jobs:
             exit 1
           fi
 
+  # ============================================================
+  # CLASSIFICATION: PACKAGING VALIDATION (Helm chart render tests)
+  # Runs on EVERY push and PR (unlike helm-lint below): the render
+  # assertions guard behaviour, not packaging. render_test.sh asserts the
+  # api Deployment mounts the chart ConfigMap via envFrom (gap fix D14),
+  # the outbox relay attempt cap value (D12, ADR 0032), a zero housekeeping
+  # interval (D15) and the MCP httpGet /healthz probes (D24).
+  # render-assertions.sh guards the frontend workload, and
+  # test_service_selectors.py proves each Service selects exactly one
+  # Deployment; both existed but no job ran them. PyYAML is installed
+  # explicitly: without it the selector test fails, not skips.
+  # ============================================================
+  chart-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: v3.16.4
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+      - name: Install PyYAML (pinned)
+        run: python3 -m pip install --require-hashes -r .github/requirements/chart-tests.txt
+      - name: Chart render assertions (envFrom ConfigMap mount, outbox cap, MCP probes)
+        run: bash charts/labor-performance/tests/render_test.sh
+      - name: Chart render assertions (frontend workload)
+        run: sh charts/labor-performance/tests/render-assertions.sh
+      - name: Chart Service selector test
+        run: python3 charts/labor-performance/tests/test_service_selectors.py
+
   helm-lint:
     runs-on: ubuntu-latest
     timeout-minutes: 10
