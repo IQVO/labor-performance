@@ -93,6 +93,7 @@ type AnalyticsPublisher struct {
 // order-management PR #111, and warehouse-infra PR #42.
 func NewAnalyticsPublisher(brokers []string, newID func() string) *AnalyticsPublisher {
 	return &AnalyticsPublisher{
+		//kafka:fixed-topic-writer AnalyticsPublisher.write is the only writer of p.Writer and builds Message{Key, Value, Headers} with no Topic; the package's Topic-setting Message (RelaySink.Send) goes through RelaySink.Writer, which NewRelaySink builds with no Topic
 		Writer: &kafkago.Writer{
 			BatchTimeout:           syncWriterBatchTimeout,
 			RequiredAcks:           syncWriterRequiredAcks,
