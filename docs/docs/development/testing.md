@@ -50,8 +50,14 @@ Source: `Makefile`, `.github/workflows/ci.yml`, `features/`, `internal/**/*_test
   `cmd/mcp/wiring_test.go`).
 - **Coverage gate:** `make coverage` runs with
   `-coverpkg=./internal/domain/...,./internal/application/...,./internal/analytics/...`
-  and fails below **90%**. CI enforces it in the `test` job and uploads
-  `coverage.out` as an artifact.
+  and fails below **90%**. CI enforces it in the `test` job (which runs
+  `make coverage` itself) and uploads `coverage.out` as an artifact.
+
+The Makefile is the single source of the coverage scope and threshold
+(gap 16d): the CI `test` job runs `make coverage` instead of its own
+`go test -coverpkg=...` command, so the local and the PR gate cannot drift;
+harness `repo_lint` rule R11 (coverage-scope) forbids a workflow passing
+`-coverpkg` itself. Change the scope or the threshold in the Makefile only.
 
 ## BDD acceptance tests (godog)
 
