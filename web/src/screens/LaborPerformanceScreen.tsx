@@ -21,20 +21,49 @@ function formatSeconds(seconds: number | null): string {
   return seconds === null ? "—" : `${seconds.toFixed(1)}s`;
 }
 
+/** Absent optional fields of a Standard are explicit states, never
+ *  zeros: an undeclared travel component means "not broken out" (the
+ *  spec's own words), and a null effectiveTo means the standard is the
+ *  one currently active. */
+function formatTravelComponent(seconds: number | null | undefined): string {
+  return seconds == null ? "Not broken out" : `${seconds}s`;
+}
+
+function formatEffectiveTo(effectiveTo: string | null | undefined): string {
+  return effectiveTo ?? "Active (open-ended)";
+}
+
+/** One label/value stat tile, extracted from the inline markup the
+ *  cards above spell out per stat -- the standards read card shows
+ *  five fields, and inlining all five would triple that card's JSX. */
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div style={{ fontSize: "var(--wh-font-size-xs)", color: "var(--wh-color-text-muted)" }}>
+        {label}
+      </div>
+      <div style={{ fontSize: "var(--wh-font-size-lg)", fontWeight: 600 }}>{value}</div>
+    </div>
+  );
+}
+
 /**
  * The single screen for this remote. labor-performance has three
  * distinct read/write surfaces rather than one flat resource
- * (process-path-management's shape): engineered standards (the only
- * write endpoint -- TaskPerformance itself is written exclusively by
- * the Kafka consumer, never over REST, see api.ts's own doc comment),
- * one associate's scorecard (lookup by id -- there is no "list all
+ * (process-path-management's shape): engineered standards (define via
+ * the only write endpoint -- TaskPerformance itself is written
+ * exclusively by the Kafka consumer, never over REST, see api.ts's own
+ * doc comment -- plus a read-only view of the currently-active
+ * standard; there is no "list standards" endpoint, only
+ * GET /standards/{taskType}, so the read half is a selector over the
+ * closed PICK/PACK/SLAM vocabulary with a per-type fetch), one
+ * associate's scorecard (lookup by id -- there is no "list all
  * associates" endpoint, so this is a search box, not a table), and
  * fleet-wide task-type performance (one of three closed enum values,
- * so a dropdown rather than free text). Kept as three Cards on one
- * screen rather than three routes since none of the three has enough
- * of its own surface to justify a sub-nav, mirroring process-path-
- * management's own single-screen precedent for a similarly-thin
- * bounded context.
+ * so a dropdown rather than free text). Kept as four Cards on one
+ * screen rather than routes since none of them has enough of its own
+ * surface to justify a sub-nav, mirroring process-path-management's
+ * own single-screen precedent for a similarly-thin bounded context.
  */
 export function LaborPerformanceScreen() {
   // --- Define standard ---
@@ -43,6 +72,19 @@ export function LaborPerformanceScreen() {
   const [defineError, setDefineError] = useState<string | null>(null);
   const [defineSuccess, setDefineSuccess] = useState<string | null>(null);
   const [defining, setDefining] = useState(false);
+
+  // --- Active standard (read-only) ---
+  // No "list standards" endpoint exists (only POST /standards and
+  // GET /standards/{taskType}), so task types with standards are
+  // discovered through the fleet's closed TaskType vocabulary the way
+  // the fleet-wide performance card below already does.
+  const [standardViewTaskType, setStandardViewTaskType] = useState<TaskType>("PICK");
+  const {
+    data: activeStandard,
+    loading: standardLoading,
+    error: standardError,
+    refetch: refetchActiveStandard,
+  } = useFetch<Standard>(`${LABOR_API_BASE}/standards/${standardViewTaskType}`);
 
   async function onDefineStandard(e: FormEvent) {
     e.preventDefault();
@@ -58,6 +100,10 @@ export function LaborPerformanceScreen() {
         `Standard for ${standard.taskType} set to ${standard.expectedSeconds}s.`,
       );
       setExpectedSeconds("");
+      // The define above may have just replaced the standard the
+      // read-only card is showing -- pull it fresh instead of leaving
+      // a stale (or stale "no active standard") state on screen.
+      void refetchActiveStandard();
     } catch (err) {
       setDefineError(err instanceof ApiError ? err.message : "Failed to define standard.");
     } finally {
@@ -149,6 +195,65 @@ export function LaborPerformanceScreen() {
           <InlineError message={defineError} />
           <InlineSuccess message={defineSuccess} />
         </form>
+      </Card>
+
+      <Card title="Active engineered standard">
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--wh-space-3)" }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 200 }}>
+            <span
+              style={{
+                fontSize: "var(--wh-font-size-xs)",
+                color: "var(--wh-color-text-muted)",
+                fontWeight: 600,
+              }}
+            >
+              Task type
+            </span>
+            <select
+              value={standardViewTaskType}
+              onChange={(e) => setStandardViewTaskType(e.target.value as TaskType)}
+              style={{
+                padding: "8px 10px",
+                borderRadius: "var(--wh-radius-md)",
+                border: "1px solid var(--wh-color-border)",
+                background: "var(--wh-color-bg-sunken)",
+                color: "var(--wh-color-text)",
+                fontSize: "var(--wh-font-size-sm)",
+              }}
+            >
+              {TASK_TYPES.map((tt) => (
+                <option key={tt} value={tt}>
+                  {tt}
+                </option>
+              ))}
+            </select>
+          </label>
+          {standardLoading && (
+            <p style={{ color: "var(--wh-color-text-muted)" }}>Loading…</p>
+          )}
+          {standardError && !standardLoading && (
+            <p style={{ color: "var(--wh-color-text-muted)" }}>
+              {standardError.message.includes("404")
+                ? `No active standard for ${standardViewTaskType}.`
+                : standardError.message}
+            </p>
+          )}
+          {activeStandard && !standardLoading && (
+            <div style={{ display: "flex", gap: "var(--wh-space-5)", flexWrap: "wrap" }}>
+              <Stat label="Task type" value={activeStandard.taskType} />
+              <Stat label="Expected seconds" value={`${activeStandard.expectedSeconds}s`} />
+              <Stat
+                label="Travel component"
+                value={formatTravelComponent(activeStandard.travelComponentSeconds)}
+              />
+              <Stat label="Effective from" value={activeStandard.effectiveFrom} />
+              <Stat
+                label="Effective to"
+                value={formatEffectiveTo(activeStandard.effectiveTo)}
+              />
+            </div>
+          )}
+        </div>
       </Card>
 
       <Card title="Associate scorecard">
