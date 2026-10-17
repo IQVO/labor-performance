@@ -4,11 +4,11 @@ import { LaborPerformanceScreen } from "./screens/LaborPerformanceScreen";
  *  by the shell.
  *
  *  labor-performance has three distinct read/write surfaces (engineered
- *  standards, one associate's scorecard, fleet-wide task-type
- *  performance) rather than a single flat resource the way
- *  process-path-management is -- see LaborPerformanceScreen's own doc
- *  comment for why these stay one screen with three cards rather than
- *  three separate routes. */
+ *  standards -- define plus a read-only view of the active one, one
+ *  associate's scorecard, fleet-wide task-type performance) rather than
+ *  a single flat resource the way process-path-management is -- see
+ *  LaborPerformanceScreen's own doc comment for why these stay one
+ *  screen with four cards rather than separate routes. */
 export default function App() {
   return <LaborPerformanceScreen />;
 }
