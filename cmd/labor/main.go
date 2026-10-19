@@ -1,6 +1,30 @@
 // Command labor is the composition root for the Labor Performance
 // service: it wires config from the environment to adapters, use cases,
 // the HTTP router, and the inbound Kafka consumer, then serves both.
+//
+// Postgres and Kafka are the ONLY runtime (ADR 0034): there is no
+// in-memory mode, no log sink, no optional relay and no consumer that can
+// be switched off. A missing mandatory variable is a boot error naming it,
+// raised before any connection is opened and before the listener binds.
+//
+// Environment:
+//
+//	DATABASE_URL                  REQUIRED. Postgres DSN
+//	MIGRATIONS_DATABASE_URL       direct DSN for the boot migrations (default DATABASE_URL)
+//	KAFKA_BROKERS                 REQUIRED. Comma-separated brokers
+//	KAFKA_CONSUMER_GROUP          REQUIRED. Consumer group of the fulfillment-events consumer
+//	EVENT_PUBLISHER               kafka (default). log is REJECTED at boot
+//	HTTP_ADDR                     listen address (default :8080)
+//	OUTBOX_RELAY_INTERVAL         relay poll interval (default 1s)
+//	OUTBOX_MAX_ATTEMPTS           failures before the relay excludes a row (default 20, 0 = unlimited)
+//	HOUSEKEEPING_INTERVAL, IDEMPOTENCY_KEY_TTL, OUTBOX_RETENTION   sweeper knobs (ADR-0023)
+//	OTEL_EXPORTER_OTLP_ENDPOINT, LOG_LEVEL, SERVICE_VERSION
+//
+// /readyz is the drain gate AND a Postgres ping AND a Kafka metadata check
+// (a broker answers a request that names no topic: reachability only, never
+// topics), cached for a few seconds. /healthz is liveness only. The service
+// never creates topics through an admin API: the cluster broker auto-creates
+// them on first write.
 package main
 
 import (
@@ -22,9 +46,7 @@ import (
 	inboundkafka "github.com/claudioed/labor-performance/internal/adapters/inbound/kafka"
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/bootretry"
-	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	outboundkafka "github.com/claudioed/labor-performance/internal/adapters/outbound/kafka"
-	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/postgres"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/system"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/telemetry"
@@ -38,17 +60,27 @@ import (
 var version = ""
 
 func main() {
-	if err := run(); err != nil {
+	if err := run(context.Background()); err != nil {
 		slog.Error("service exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+// run boots the service and serves until SIGINT/SIGTERM or until ctx is
+// cancelled (the in-process integration test stops it that way), then shuts
+// down in the fleet order. It reads the whole configuration from the
+// environment.
+func run(ctx context.Context) error {
 	logger := newLogger(getenv("LOG_LEVEL", "info"))
 	slog.SetDefault(logger)
 
-	ctx := context.Background()
+	// Fail fast, before telemetry, any connection and the listener: a
+	// missing mandatory variable is a boot error that names it.
+	cfg, err := loadBootConfig()
+	if err != nil {
+		return err
+	}
+
 	serviceName, shutdownTelemetry, err := setupTelemetry(ctx, logger)
 	if err != nil {
 		return err
@@ -62,11 +94,10 @@ func run() error {
 	}()
 
 	httpAddr := getenv("HTTP_ADDR", ":8080")
-	databaseURL := os.Getenv("DATABASE_URL")
-	// MIGRATIONS_DATABASE_URL, when set, is a DIRECT (non-pooled,
-	// session-mode) Postgres connection string used ONLY for the
-	// golang-migrate startup step below — everything else (the pgxpool
-	// this process serves requests through) keeps using databaseURL
+	// cfg.migrationsDatabaseURL is MIGRATIONS_DATABASE_URL, a DIRECT
+	// (non-pooled, session-mode) Postgres connection string used ONLY for
+	// the golang-migrate startup step below — everything else (the pgxpool
+	// this process serves requests through) keeps using cfg.databaseURL
 	// unchanged. See buildPersistence's doc comment for the full "why":
 	// golang-migrate's postgres driver takes a session-scoped
 	// `SELECT pg_advisory_lock($1)` to serialize concurrent migration
@@ -74,29 +105,22 @@ func run() error {
 	// (warehouse-infra's PgBouncer rollout, PR #43; this fallback closes
 	// the fleet-wide bug that rollout introduced — see ADR
 	// 0020-migrations-direct-postgres-connection.md, porting
-	// order-management's ADR-0029). Falls back to databaseURL when
-	// unset, which is every environment that doesn't provision the
-	// split (local dev, CI integration tests, and any cluster whose
-	// Terraform predates this fix) — byte-identical to this service's
-	// behavior before this change in that case.
-	migrationsDatabaseURL := getenv("MIGRATIONS_DATABASE_URL", databaseURL)
-	migrationsPath := getenv("MIGRATIONS_PATH", "migrations")
-
-	persistence, err := buildPersistence(ctx, databaseURL, migrationsDatabaseURL, migrationsPath, logger)
+	// order-management's ADR-0029). It falls back to DATABASE_URL when
+	// unset.
+	persistence, err := buildPersistence(ctx, cfg.databaseURL, cfg.migrationsDatabaseURL, cfg.migrationsPath, logger)
 	if err != nil {
 		return err
 	}
 	defer persistence.close()
 	standards, performances, processed := persistence.standards, persistence.performances, persistence.processed
 
-	publisher, relay, closePublisher := buildEventPublisher(persistence, logger)
+	publisher, relay, closePublisher := buildEventPublisher(persistence, cfg.kafkaBrokers, logger)
 	defer closePublisher()
 	clock := system.Clock{}
 
 	// Housekeeping sweeper (ADR-0023) + the outbox-lag gauge (ADR-0010's
-	// deferred follow-up), both no-ops without the Postgres backing. The
-	// returned stop func is deferred so it runs BEFORE the deferred
-	// persistence.close() closes the pool.
+	// deferred follow-up). The returned stop func is deferred so it runs
+	// BEFORE the deferred persistence.close() closes the pool.
 	stopHousekeeping := startHousekeeping(persistence.pool, logger)
 	defer stopHousekeeping()
 
@@ -117,7 +141,16 @@ func run() error {
 		Logger:            logger,
 	}
 
-	readiness, server := buildHTTPServer(persistence, standards, performances, publisher, clock, standardMetrics)
+	// readiness backs GET /readyz (ADR-0017 §graceful shutdown, ADR 0034):
+	// the drain gate, flipped to not-ready as the FIRST step of the shutdown
+	// sequence, AND a Postgres ping AND a Kafka metadata check, so a
+	// Kubernetes readinessProbe only routes traffic to a pod whose
+	// dependencies answer.
+	readiness := inboundhttp.NewReadiness(0, 0,
+		inboundhttp.Dependency{Name: "postgres", Check: persistence.pool.Ping},
+		inboundhttp.Dependency{Name: "kafka", Check: outboundkafka.NewBrokerCheck(cfg.kafkaBrokers).Check},
+	)
+	server := buildHTTPServer(persistence, standards, performances, publisher, clock, standardMetrics, readiness)
 
 	httpServer := &http.Server{
 		Addr:              httpAddr,
@@ -125,22 +158,19 @@ func run() error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	kafkaBrokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
-	kafkaGroupID := getenv("KAFKA_CONSUMER_GROUP", "labor-performance")
-	consumer := inboundkafka.NewConsumer(kafkaBrokers, kafkaGroupID, recordTaskPerformance, logger)
+	consumer := inboundkafka.NewConsumer(cfg.kafkaBrokers, cfg.consumerGroup, recordTaskPerformance, logger)
 
-	return serve(ctx, httpServer, consumer, relay, kafkaBrokers, kafkaGroupID, logger, readiness)
+	return serve(ctx, httpServer, consumer, relay, cfg.kafkaBrokers, cfg.consumerGroup, logger, readiness)
 }
 
 // buildHTTPServer assembles the inbound HTTP adapter's dependency set:
-// every use case the router serves plus the optional Postgres-backed
-// collaborators. readiness gates GET /readyz (ADR-0017 §graceful
-// shutdown): the zero value is ready and SetNotReady is called as the
-// FIRST step of shutdown, before the HTTP server stops accepting, so a
-// Kubernetes readinessProbe has a window to observe the flip.
-func buildHTTPServer(p *persistence, standards ports.StandardRepo, performances ports.PerformanceRepo, publisher ports.EventPublisher, clock ports.Clock, standardMetrics *telemetry.StandardMetrics) (*inboundhttp.Readiness, *inboundhttp.Server) {
-	readiness := &inboundhttp.Readiness{}
-	return readiness, &inboundhttp.Server{
+// every use case the router serves plus the Postgres-backed collaborators.
+// readiness gates GET /readyz (ADR-0017 §graceful shutdown): SetNotReady is
+// called as the FIRST step of shutdown, before the HTTP server stops
+// accepting, so a Kubernetes readinessProbe has a window to observe the
+// flip.
+func buildHTTPServer(p *persistence, standards ports.StandardRepo, performances ports.PerformanceRepo, publisher ports.EventPublisher, clock ports.Clock, standardMetrics *telemetry.StandardMetrics, readiness *inboundhttp.Readiness) *inboundhttp.Server {
+	return &inboundhttp.Server{
 		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock, UnitOfWork: p.uow, Metrics: standardMetrics},
 		GetStandard:            &usecases.GetStandard{Standards: standards},
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
@@ -150,10 +180,8 @@ func buildHTTPServer(p *persistence, standards ports.StandardRepo, performances 
 			IdlePeriods:  p.idlePeriods,
 			Clock:        clock,
 		},
-		// IdempotencyPool is nil for the in-memory dev configuration
-		// (DATABASE_URL unset) — see persistence.pool's own doc
-		// comment and RequireIdempotencyKey's nil-pool convention in
-		// server.go.
+		// IdempotencyPool is always the Postgres pool: the Idempotency-Key
+		// check on POST /standards is always on (ADR 0034).
 		IdempotencyPool: p.pool,
 		Readiness:       readiness,
 	}
@@ -167,18 +195,11 @@ func buildHTTPServer(p *persistence, standards ports.StandardRepo, performances 
 //   - the housekeeping sweeper (ADR-0023): bounds idempotency_keys
 //     (IDEMPOTENCY_KEY_TTL, default 24h) and PUBLISHED outbox_events
 //     (OUTBOX_RETENTION, default 7d), sweeping every HOUSEKEEPING_INTERVAL
-//     (default 1h; 0 disables). Idempotency keys are written regardless of
-//     EVENT_PUBLISHER, so the sweeper is not gated on it.
+//     (default 1h; 0 disables).
 //   - labor_performance.outbox.lag_seconds (ADR-0010's deferred outbox-lag
 //     metric): an async gauge sampling the age of the oldest unpublished
 //     outbox row.
-//
-// With a nil pool (in-memory dev configuration) it is a no-op.
 func startHousekeeping(pool *pgxpool.Pool, logger *slog.Logger) func() {
-	if pool == nil {
-		return func() {}
-	}
-
 	if reg, err := postgres.RegisterOutboxLagGauge(pool); err != nil {
 		logger.Warn("outbox lag gauge unavailable", "error", err)
 	} else {
@@ -227,11 +248,11 @@ func setupTelemetry(ctx context.Context, logger *slog.Logger) (string, func(cont
 	return serviceName, shutdown, nil
 }
 
-// serve runs the wired components until a signal arrives or one of them
-// fails: the HTTP server, the fulfillment-events consumer, and (when a
-// Postgres-backed outbox relay is configured) the relay draining committed
-// events onto Kafka. On shutdown it drains them in order — consumer, HTTP
-// server, relay — and returns the first component error, if any.
+// serve runs the wired components until a signal arrives (or ctx is
+// cancelled) or one of them fails: the HTTP server, the fulfillment-events
+// consumer, and the Postgres-backed outbox relay draining committed events
+// onto Kafka. On shutdown it drains them in order — readiness flip, HTTP
+// server, relay, consumer — and returns the first component error, if any.
 func serve(ctx context.Context, httpServer *http.Server, consumer *inboundkafka.Consumer, relay *postgres.OutboxRelay, kafkaBrokers []string, kafkaGroupID string, logger *slog.Logger, readiness *inboundhttp.Readiness) error {
 	defer func() {
 		if err := consumer.Close(); err != nil {
@@ -265,27 +286,22 @@ func serve(ctx context.Context, httpServer *http.Server, consumer *inboundkafka.
 		}
 	}()
 
-	stopCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	stopCtx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// The outbox relay (ADR 0010) runs alongside the HTTP server and the
-	// consumer in the same process, draining outbox_events onto Kafka. It
-	// is only wired when both Postgres and the kafka publisher are
-	// configured.
+	// consumer in the same process, draining outbox_events onto Kafka. It is
+	// always on: the service has no other way to publish.
 	relayDone := make(chan struct{})
 	relayCtx, stopRelay := context.WithCancel(context.Background())
 	defer stopRelay()
-	if relay != nil {
-		go func() {
-			defer close(relayDone)
-			logger.Info("outbox relay running", "topics", []string{cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TopicLaborPerformanceEvents})
-			if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
-				errCh <- err
-			}
-		}()
-	} else {
-		close(relayDone)
-	}
+	go func() {
+		defer close(relayDone)
+		logger.Info("outbox relay running", "topics", []string{cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TopicLaborPerformanceEvents})
+		if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
+			errCh <- err
+		}
+	}()
 
 	select {
 	case err := <-errCh:
@@ -380,36 +396,20 @@ func serviceVersion() string {
 }
 
 // buildEventPublisher wires the outbound event publisher, returning it,
-// the outbox relay to run alongside the HTTP server (nil when there is
-// none), and a close function.
+// the outbox relay to run alongside the HTTP server, and a close function.
 //
-// The default is the log publisher this service has always used, so
-// nothing about the existing OLTP behaviour changes unless it is opted
-// into. Setting EVENT_PUBLISHER=kafka additionally fans every domain
-// event onto TWO Kafka topics: warehouse.labor-performance.analytics,
-// which feeds the analytical data product's projector (ADR-0007), and
-// warehouse.labor-performance.events, this service's integration topic
-// (ADR-0013) carrying TaskPerformanceRecorded for other bounded contexts
-// to consume. The log publisher stays FIRST in the fan-out so a broker
-// outage still leaves the event visible in the logs before the publish
-// error surfaces.
-//
-// With BOTH Postgres and kafka configured the use cases publish into the
-// transactional outbox (ADR 0010) and the relay forwards rows to both
-// topics; the store and the topics can no longer diverge. With kafka but
-// no Postgres (in-memory dev runs) events go straight to the broker as
-// before — there is no transaction to bind them to.
+// The only publisher is the Kafka-backed transactional outbox (ADR 0010,
+// ADR 0034): every domain event is enqueued onto TWO Kafka topics in the
+// same transaction as the aggregate write — warehouse.labor-performance.
+// analytics, which feeds the analytical data product's projector (ADR-0007),
+// and warehouse.labor-performance.events, this service's integration topic
+// (ADR-0013) carrying TaskPerformanceRecorded for other bounded contexts to
+// consume — and the relay forwards the rows. The store and the topics can
+// never diverge. There is no log sink and no direct-to-broker mode.
 //
 // None of this touches the domain or application layers: they still see
 // one ports.EventPublisher.
-func buildEventPublisher(p *persistence, logger *slog.Logger) (ports.EventPublisher, *postgres.OutboxRelay, func()) {
-	logPublisher := events.NewLogPublisher(logger)
-	if !strings.EqualFold(getenv("EVENT_PUBLISHER", "log"), "kafka") {
-		logger.Info("event publisher configured", "publisher", "log", "mode", "direct")
-		return logPublisher, nil, func() {}
-	}
-
-	brokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
+func buildEventPublisher(p *persistence, brokers []string, logger *slog.Logger) (ports.EventPublisher, *postgres.OutboxRelay, func()) {
 	analytics := outboundkafka.NewAnalyticsPublisher(brokers, uuid.NewString)
 	integration := outboundkafka.NewIntegrationPublisher(brokers, uuid.NewString)
 	closePublishers := func() {
@@ -419,12 +419,6 @@ func buildEventPublisher(p *persistence, logger *slog.Logger) (ports.EventPublis
 		if err := integration.Close(); err != nil {
 			logger.Error("error closing integration kafka publisher", "error", err)
 		}
-	}
-
-	if p.pool == nil {
-		logger.Info("event publisher configured", "publisher", "kafka", "mode", "direct",
-			"topics", []string{cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TopicLaborPerformanceEvents}, "brokers", brokers)
-		return outboundkafka.NewFanOutPublisher(logPublisher, analytics, integration), nil, closePublishers
 	}
 
 	sink := outboundkafka.NewRelaySink(brokers)
@@ -438,8 +432,7 @@ func buildEventPublisher(p *persistence, logger *slog.Logger) (ports.EventPublis
 	logger.Info("event publisher configured", "publisher", "kafka", "mode", "outbox",
 		"topics", []string{cloudevents.TopicLaborPerformanceAnalytics, cloudevents.TopicLaborPerformanceEvents}, "brokers", brokers,
 		"outbox_max_attempts", maxAttempts)
-	outbox := postgres.NewOutboxPublisher(p.pool, analytics, integration)
-	return outboundkafka.NewFanOutPublisher(logPublisher, outbox), relay, func() {
+	return postgres.NewOutboxPublisher(p.pool, analytics, integration), relay, func() {
 		if err := sink.Close(); err != nil {
 			logger.Error("error closing outbox relay sink", "error", err)
 		}
@@ -447,10 +440,9 @@ func buildEventPublisher(p *persistence, logger *slog.Logger) (ports.EventPublis
 	}
 }
 
-// persistence is what buildPersistence wires: the repos the use cases
-// read/write through, the Postgres pool (nil when running in-memory),
-// and the UnitOfWork that brackets Save + Publish (nil when in-memory,
-// which the use cases treat as "run them back to back").
+// persistence is what buildPersistence wires: the Postgres repos the use
+// cases read/write through, the pool, and the UnitOfWork that brackets
+// Save + Publish.
 type persistence struct {
 	standards    ports.StandardRepo
 	performances ports.PerformanceRepo
@@ -461,9 +453,8 @@ type persistence struct {
 	close        func()
 }
 
-// buildPersistence wires the Postgres adapters when DATABASE_URL is set,
-// or falls back to the in-memory adapters for local development without a
-// database.
+// buildPersistence wires the Postgres adapters. An empty databaseURL is a
+// boot error (errNoDatabase): there is no in-memory fallback (ADR 0034).
 //
 // migrationsDatabaseURL is used ONLY for the golang-migrate step below —
 // the pgxpool opened just after it (and used for every subsequent
@@ -483,18 +474,10 @@ type persistence struct {
 // MIGRATIONS_DATABASE_URL when set (warehouse-infra provisions it as a
 // direct, non-pooled DSN alongside DATABASE_URL, PR #44) or fall back to
 // databaseURL itself for any environment that doesn't provision the split
-// (local dev, CI integration tests) — byte-identical to this function's
-// behavior before this parameter existed in that case.
+// (local dev, CI integration tests).
 func buildPersistence(ctx context.Context, databaseURL, migrationsDatabaseURL, migrationsPath string, logger *slog.Logger) (*persistence, error) {
 	if databaseURL == "" {
-		logger.Info("database url not configured; using in-memory adapters")
-		return &persistence{
-			standards:    memory.NewStandardRepo(),
-			performances: memory.NewPerformanceRepo(),
-			processed:    memory.NewProcessedEventRepo(),
-			idlePeriods:  memory.NewIdlePeriodRepo(),
-			close:        func() {},
-		}, nil
+		return nil, errNoDatabase
 	}
 
 	// Retried: this fleet's Istio native sidecars reset EVERY pod's first
