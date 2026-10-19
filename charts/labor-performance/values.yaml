@@ -104,7 +104,7 @@ resources:
 autoscaling:
   # cmd/labor (this Deployment, component=api): stateless OLTP HTTP +
   # Kafka consumer of warehouse.fulfillment.events. Its Kafka consumer
-  # group (config.kafkaConsumerGroup, default "labor-performance") is a
+  # group (config.kafkaConsumerGroup, required, no default) is a
   # STABLE, shared group with no per-instance uniqueness -- the fleet's
   # normal horizontally-scalable pattern, N replicas share partitions via
   # ordinary Kafka group rebalancing (same shape as order-management's
@@ -181,26 +181,28 @@ autoscaling:
 # exports. Set per-cluster (local / staging / production).
 environment: "local"
 
-# Falls back to in-memory adapters when database.url / database.existingSecret
-# are left empty, same as running the binary locally with no env vars set.
-# This service is a Kafka CONSUMER (not just a publisher, unlike
-# inventory-storage) — kafka.enabled gates whether KAFKA_BROKERS is set at
-# all; the consumer group id is fixed via config.kafkaConsumerGroup.
+# Postgres and Kafka are the ONLY runtime (ADR 0034): there is no in-memory
+# mode, no log sink and no consumer that can be switched off. The chart refuses
+# to render without database.url / database.existingSecret (DATABASE_URL),
+# kafka.brokers (KAFKA_BROKERS) and config.kafkaConsumerGroup
+# (KAFKA_CONSUMER_GROUP); the binary exits at boot without them.
 config:
   httpAddr: ":8080"
   migrationsPath: "migrations"
   logLevel: "info"        # debug | info | warn (or warning) | error, case-insensitive
-  kafkaConsumerGroup: "labor-performance"
+  # REQUIRED. KAFKA_CONSUMER_GROUP: the stable consumer group of the
+  # fulfillment-events consumer (warehouse.fulfillment.events). No default:
+  # an empty value fails the render. warehouse-infra sets "labor-performance".
+  kafkaConsumerGroup: ""
   corsAllowedOrigins: "http://localhost:5173,http://localhost:5187"
-  # EVENT_PUBLISHER (ADR-0010/0013): "log" (default) keeps the log
-  # publisher only; "kafka" fans every domain event out to
-  # warehouse.labor-performance.analytics AND .events — through the
-  # transactional outbox whenever the database is configured. Previously
-  # this env was never set by the chart, so publishing in-cluster relied
-  # on a hand-written extraEnv entry.
-  eventPublisher: "log"
+  # EVENT_PUBLISHER (ADR-0010/0013/0034): the only publisher is "kafka" -- every
+  # domain event fans out to warehouse.labor-performance.analytics AND .events
+  # through the transactional outbox. "log" (the old default) is REJECTED by the
+  # binary at boot and by this chart at render. The key is kept because
+  # warehouse-infra sets it.
+  eventPublisher: "kafka"
   # OUTBOX_RELAY_INTERVAL (ADR-0010): how often the in-process relay
-  # drains outbox_events onto Kafka when eventPublisher=kafka.
+  # (always on) drains outbox_events onto Kafka.
   outboxRelayInterval: "1s"
   # OUTBOX_MAX_ATTEMPTS (ADR 0032): after this many failed sends an outbox
   # row is no longer claimed, so one poison row cannot block the relay
@@ -216,6 +218,8 @@ config:
   outboxRetention: "168h"
 
 database:
+  # REQUIRED (ADR 0034): one of url / existingSecret (DATABASE_URL). No
+  # default and no in-memory fallback: both empty fails the render.
   url: ""
   existingSecret: ""
   existingSecretKey: "DATABASE_URL"
@@ -234,14 +238,15 @@ database:
   migrationsExistingSecretKey: "MIGRATIONS_DATABASE_URL"
 
 # This service consumes warehouse.fulfillment.events (fulfillment-execution's
-# TaskCompleted). kafka.enabled gates whether KAFKA_BROKERS is set in the
-# container env at all — without it, the consumer goroutine still starts
-# (matching the binary's own local-dev behavior) but can never reach a
-# broker, so the deployment is functionally REST-only until kafka.enabled
-# is true.
+# TaskCompleted) and publishes its own two topics through the outbox relay, so
+# Kafka is mandatory (ADR 0034): kafka.brokers has no default and an empty value
+# fails the render (KAFKA_BROKERS; the projector reads the same value).
+# warehouse-infra supplies the platform brokers from _platform.yaml. The old
+# switch `kafka.enabled` is no longer a value of this chart: warehouse-infra
+# still passes `kafka.enabled: true`, which keeps rendering, but `false` fails
+# the render because Kafka cannot be switched off.
 kafka:
-  enabled: false
-  brokers: "kafka:9092"
+  brokers: ""
 
 # OpenTelemetry traces + metrics, pushed over OTLP/gRPC to a Collector. The
 # endpoint below is the in-cluster Collector Service in the warehouse-infra

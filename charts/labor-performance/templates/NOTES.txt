@@ -15,18 +15,7 @@ To reach it locally:
   curl http://localhost:8080/healthz
 {{- end }}
 
-{{- if not (or .Values.database.url .Values.database.existingSecret) }}
-
-NOTE: no database.url / database.existingSecret was set — running with
-IN-MEMORY adapters (state is lost on pod restart).
-{{- end }}
-
-{{- if not .Values.kafka.enabled }}
-NOTE: kafka.enabled is false — KAFKA_BROKERS is not set in the container
-env, so the inbound Kafka consumer goroutine starts but can never reach a
-broker. This service is a CONSUMER of fulfillment-execution's
-TaskCompleted event (warehouse.fulfillment.events) — without a broker it
-will never learn of completed tasks, so /associates/{id}/scorecard and
-/task-types/{taskType}/performance will stay empty regardless of any
-standards you define over REST.
-{{- end }}
+This service runs on real Postgres and real Kafka only (ADR 0034). The pod
+exits at boot without DATABASE_URL, KAFKA_BROKERS and KAFKA_CONSUMER_GROUP, and
+/readyz stays 503 while Postgres or a Kafka broker is unreachable:
+  curl http://localhost:8080/readyz
