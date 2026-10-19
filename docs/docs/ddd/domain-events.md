@@ -29,12 +29,10 @@ Attributes set on every published event (`cloudevents.New`):
 | `datacontenttype` | `application/json` |
 | `dataschema` | `urn:warehouse:labor-performance:<stream>:<EventName>:v1`, stream = `analytics` or `events` |
 
-The domain event is raised inside the use case's unit of work. With
-`EVENT_PUBLISHER=kafka` and `DATABASE_URL` set it is encoded into
-`outbox_events` in the same transaction and published by the outbox
-relay (ADR 0010); with `EVENT_PUBLISHER=kafka` and no database it is
-written straight to Kafka; by default (`EVENT_PUBLISHER=log`) it is only
-logged.
+The domain event is raised inside the use case's unit of work. It is
+encoded into `outbox_events` in the same transaction and published by the
+always-on outbox relay (ADR 0010). There is no direct-to-Kafka path and no
+log-only mode ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)).
 
 ## Published
 

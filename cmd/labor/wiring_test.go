@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -47,7 +48,7 @@ func TestBuildPersistence_RetriesTheDatabaseNotJustOnce(t *testing.T) {
 	elapsed := time.Since(start)
 
 	if err == nil {
-		t.Fatal("an unreachable database must fail boot, never fall back to the in-memory repo")
+		t.Fatal("an unreachable database must fail boot, never fall back to anything else")
 	}
 	if elapsed < 3*time.Second {
 		t.Fatalf("buildPersistence gave up in %v — it is not retrying, so a single "+
@@ -58,24 +59,19 @@ func TestBuildPersistence_RetriesTheDatabaseNotJustOnce(t *testing.T) {
 	}
 }
 
-// With no DATABASE_URL the in-memory repo is correct and must cost
-// nothing: no dial, no backoff, no delay to a local run.
-func TestBuildPersistence_NoDatabaseURLUsesMemoryImmediately(t *testing.T) {
+// With no DATABASE_URL there is no in-memory fallback: buildPersistence
+// refuses at once (ADR 0034), without dialling or retrying anything.
+func TestBuildPersistence_NoDatabaseURLIsABootError(t *testing.T) {
 	start := time.Now()
 	p, err := buildPersistence(context.Background(), "", "", migrationsDirForTest(t), quietLogger())
-	if err != nil {
-		t.Fatalf("buildPersistence: %v", err)
+	if !errors.Is(err, errNoDatabase) {
+		t.Fatalf("buildPersistence error = %v, want errNoDatabase (naming DATABASE_URL)", err)
 	}
-	defer p.close()
-
-	if p.standards == nil {
-		t.Fatal("no repository returned")
-	}
-	if p.pool != nil {
-		t.Fatal("no DATABASE_URL must not open a pool")
+	if p != nil {
+		t.Fatal("no DATABASE_URL must not return any persistence, in memory or otherwise")
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("the in-memory path took %v; it must not touch the network", elapsed)
+		t.Fatalf("the refusal took %v; it must not touch the network", elapsed)
 	}
 }
 

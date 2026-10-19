@@ -30,8 +30,8 @@ import (
 
 	inboundmcp "github.com/claudioed/labor-performance/internal/adapters/inbound/mcp"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/bootretry"
-	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/postgres"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/system"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/telemetry"
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
@@ -51,6 +51,13 @@ func run() error {
 		newJSONHandler(getenv("LOG_LEVEL", "info")),
 	))
 	slog.SetDefault(logger)
+
+	// Fail fast, before telemetry, any connection and the listener: a
+	// missing DATABASE_URL is a boot error that names it.
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		return errNoDatabase
+	}
 
 	// Same non-blocking telemetry setup as the HTTP service: an unreachable
 	// Collector degrades to dropped telemetry, never a server that won't start.
@@ -72,7 +79,6 @@ func run() error {
 	}()
 
 	httpAddr := getenv("MCP_ADDR", ":8090")
-	databaseURL := os.Getenv("DATABASE_URL")
 	// See cmd/labor/main.go's identical fallback and buildAdapters' doc
 	// comment for the full "why" (session-scoped pg_advisory_lock vs
 	// PgBouncer transaction-pooling incompatibility, ADR
@@ -97,7 +103,7 @@ func run() error {
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: adapters.performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: adapters.performances},
 		GetStandard:            &usecases.GetStandard{Standards: adapters.standards},
-		GetUtilization:         &usecases.GetUtilization{Performances: adapters.performances, IdlePeriods: adapters.idlePeriods, Clock: memory.SystemClock{}},
+		GetUtilization:         &usecases.GetUtilization{Performances: adapters.performances, IdlePeriods: adapters.idlePeriods, Clock: system.Clock{}},
 	}
 	server := inboundmcp.NewServer(deps)
 	handler := newRouter(inboundmcp.Handler(server), serviceName)
@@ -153,19 +159,24 @@ func newRouter(mcpHandler http.Handler, serviceName string) http.Handler {
 	return r
 }
 
-// adapterSet is the read-side outbound repos the MCP server needs, chosen
-// at startup: Postgres when DATABASE_URL is set, in-memory otherwise. It
-// mirrors cmd/labor's selection so both binaries read the same store.
+// adapterSet is the read-side outbound repos the MCP server needs: the
+// Postgres repos, over the same database as cmd/labor so both binaries read
+// the same store.
 type adapterSet struct {
 	standards    ports.StandardRepo
 	performances ports.PerformanceRepo
 	idlePeriods  ports.IdlePeriodRepo
 }
 
-// buildAdapters wires the Postgres repos when DATABASE_URL is set, or falls
-// back to the in-memory repos for local development without a database --
-// exactly as cmd/labor/main.go's buildPersistence does (minus the
-// ProcessedEvents repo, which only the Kafka-consuming OLTP binary needs).
+// errNoDatabase is the boot error of a missing DATABASE_URL: the MCP server
+// reads the same Postgres as cmd/labor and has no in-memory fallback
+// (ADR 0034).
+var errNoDatabase = errors.New("DATABASE_URL is required: this context runs on real Postgres")
+
+// buildAdapters wires the Postgres repos over DATABASE_URL, as
+// cmd/labor/main.go's buildPersistence does (minus the ProcessedEvents repo,
+// which only the Kafka-consuming OLTP binary needs). An empty databaseURL is
+// a boot error naming the variable; there is no in-memory fallback.
 //
 // migrationsDatabaseURL is used ONLY for the golang-migrate step below,
 // mirroring cmd/labor/main.go's buildPersistence exactly — see its doc
@@ -176,12 +187,7 @@ func buildAdapters(ctx context.Context, databaseURL, migrationsDatabaseURL, migr
 	noop := func() {}
 
 	if databaseURL == "" {
-		logger.Info("database url not configured; using in-memory adapters")
-		return adapterSet{
-			standards:    memory.NewStandardRepo(),
-			performances: memory.NewPerformanceRepo(),
-			idlePeriods:  memory.NewIdlePeriodRepo(),
-		}, noop, nil
+		return adapterSet{}, noop, errNoDatabase
 	}
 
 	if err := bootretry.Retry(ctx, logger, "run migrations", func() error {

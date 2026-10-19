@@ -110,6 +110,17 @@ A separate feature file,
     `consumer_dlq_integration_test.go`, `consumer_dlq_autocreate_integration_test.go`,
     `analytics_consumer_integration_test.go`
   - integration publisher: `internal/adapters/outbound/kafka/integration_publisher_integration_test.go`
+  - the real runtime end to end ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)):
+    `cmd/labor/e2e_integration_test.go` (`TestRunOnRealPostgresAndKafka`) boots
+    `run()` on a Postgres and a Kafka container with only the deployment's
+    environment and drives REST and Kafka only; the NUL guard is pinned on real
+    Postgres by `TestNUL_IsAClientErrorAndDoesNotConsumeTheKey`
+- **Boot-config and sensor tests** (no containers, run in `make test`/`make arch-test`):
+  `cmd/labor/bootconfig_test.go`, `cmd/labor-projector/config_test.go`,
+  `cmd/mcp/wiring_test.go` (every mandatory variable is a boot error that names
+  it); `TestRuntimeBinaryHasNoInMemoryAdapters` and its
+  `TestRuntimeBinarySensorBites` in `internal/architecture` (no non-test file
+  under `cmd/**` imports `internal/adapters/outbound/memory`).
 - **Guard rails:** the fitness tests `TestPostgresIntegrationTestsUseTestcontainers`
   and `TestKafkaIntegrationTestsUseTestcontainers` fail the build if an
   integration test skips on `DATABASE_URL` or `KAFKA_BROKERS`, or
@@ -120,8 +131,11 @@ A separate feature file,
 
 - **Command:** `make contract` (`scripts/contract-test.sh`). CI job:
   `contract`. Needs `st`: `python3 -m pip install 'schemathesis==4.28.0'`.
-- **How:** builds `cmd/labor`, starts it in memory on `127.0.0.1:18083`
-  (`CONTRACT_PORT`), waits for `/healthz`, then runs
+- **How:** builds `cmd/labor`, starts it on `127.0.0.1:18083`
+  (`CONTRACT_PORT`) against a real Postgres and Kafka (`DATABASE_URL` and
+  `KAFKA_BROKERS` are required; CI provides `postgres:16` and
+  `confluent-local` service containers, locally `docker compose up -d --wait
+  postgres kafka`), waits for `/readyz`, then runs
   `st run apis/openapi.yaml --max-examples 100 --workers 4`
   (`CONTRACT_MAX_EXAMPLES` overrides the example count).
 - **Excluded operations:** `defineStandard` (the cross-field rule
