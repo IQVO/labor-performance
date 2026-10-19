@@ -1,4 +1,6 @@
 # Project: Labor Performance (Supporting Bounded Context)
+
+<!-- harness-template: v4 -->
 Engineered labor standards ("a PICK should take 45s") and actual-vs-standard
 performance scoring for the `warehouse-systems` fleet (Go 1.26, module
 `github.com/claudioed/labor-performance`). Docs: https://iqvo.github.io/labor-performance/
