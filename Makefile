@@ -112,7 +112,9 @@ bdd:
 
 # Property-based contract tests against apis/openapi.yaml — mirrors the
 # `contract` CI job. Not part of check/check-all (needs Python tooling
-# installed); CI runs it as its own job on every push and PR.
+# installed AND a real Postgres + Kafka: export DATABASE_URL and
+# KAFKA_BROKERS, see the header of scripts/contract-test.sh); CI runs it as
+# its own job on every push and PR against service containers.
 contract:
 	./scripts/contract-test.sh
 
