@@ -15,6 +15,8 @@ record.
 
 > **Envelope superseded by [ADR-0021](./0021-cloudevents-mandatory-event-envelope.md).** The flat envelope (`event_id`/`event_type`/`occurred_at`) described below is retired: every message is now a CloudEvents 1.0 event. The rest of this decision stands.
 
+> **Runtime modes superseded by [ADR-0034](./0034-postgres-and-kafka-are-the-only-runtime.md).** The log-only default publisher (`EVENT_PUBLISHER=log`) and the no-database direct path mentioned below are retired: the Kafka outbox is the only publisher.
+
 ## Context
 
 Every other bounded context in the `warehouse-systems` fleet both

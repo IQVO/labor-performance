@@ -27,8 +27,8 @@ How values are parsed:
   [Zero disables housekeeping](#zero-disables-housekeeping).
 - **`IDLE_GAP_CAP_SECONDS`** is an integer. A malformed, zero or negative
   value falls back to 3600.
-- **Lists** (`KAFKA_BROKERS`, `CORS_ALLOWED_ORIGINS`) are split on `,`
-  without trimming spaces, so write them without spaces.
+- **Lists** (`KAFKA_BROKERS`, `CORS_ALLOWED_ORIGINS`) are split on `,`;
+  `KAFKA_BROKERS` also trims spaces and drops blanks.
 
 The Helm chart column shows the `charts/labor-performance/values.yaml` key
 that sets the variable. The api Deployment (`cmd/labor`) also mounts the
@@ -41,18 +41,26 @@ default applies unless you add it through `extraEnv` (api) or
 
 ## `cmd/labor` (OLTP service: REST API, Kafka consumer, outbox relay, sweeper)
 
+Postgres and Kafka are the only runtime ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)).
+`DATABASE_URL`, `KAFKA_BROKERS` and `KAFKA_CONSUMER_GROUP` are mandatory:
+`loadBootConfig` reports every missing one at once, each naming its variable,
+before telemetry, any connection and the listener. The relay and the consumer
+always run. `GET /readyz` is `200` only while the service is not draining,
+Postgres answers a ping and a Kafka broker answers a metadata request (cached
+3 s, bounded to 2 s); `GET /healthz` is liveness only.
+
 | Variable | Default | Required? | Meaning | Read in | Chart value |
 | --- | --- | --- | --- | --- | --- |
 | `HTTP_ADDR` | `:8080` | no | Listen address of the REST API (`/standards`, scorecard, performance, utilization, `/healthz`, `/readyz`). | `cmd/labor/main.go` | `config.httpAddr` |
-| `DATABASE_URL` | *(unset)* | no | OLTP Postgres DSN for the runtime `pgxpool` (`MaxConns` 10, `statement_timeout` 5s). **Unset means in-memory adapters**: no persistence, no transactional outbox, no `Idempotency-Key` middleware, no sweeper, no outbox-lag gauge. | `cmd/labor/main.go` | `database.url` / `database.existingSecret` + `database.existingSecretKey` |
+| `DATABASE_URL` | — | **yes** | OLTP Postgres DSN for the runtime `pgxpool` (`MaxConns` 10, `statement_timeout` 5s). There is no in-memory mode ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)): the process exits at boot with `DATABASE_URL is required: this context runs on real Postgres` when it is unset. | `cmd/labor/config.go` | `database.url` / `database.existingSecret` + `database.existingSecretKey` (required by the chart) |
 | `MIGRATIONS_DATABASE_URL` | value of `DATABASE_URL` | no | Direct (non-PgBouncer) DSN used **only** by the golang-migrate step at startup. golang-migrate takes a session-scoped advisory lock, which PgBouncer transaction pooling cannot hold ([ADR 0020](../adr/0020-migrations-direct-postgres-connection.md)). | `cmd/labor/main.go` | `database.migrationsExistingSecretKey` (secret key, `optional: true`) |
 | `MIGRATIONS_PATH` | `migrations` | no | Directory of the OLTP `*.up.sql` files (`migrations/0001`–`0006`). | `cmd/labor/main.go` | `config.migrationsPath` |
-| `KAFKA_BROKERS` | `localhost:9092` | no | Comma-separated brokers. Used by the `warehouse.fulfillment.events` consumer, its DLQ writer and, with `EVENT_PUBLISHER=kafka`, the publishers and relay sink. | `cmd/labor/main.go` | `kafka.brokers` (only when `kafka.enabled=true`) |
-| `KAFKA_CONSUMER_GROUP` | `labor-performance` | no | Consumer group id on `warehouse.fulfillment.events`. | `cmd/labor/main.go` | `config.kafkaConsumerGroup` |
-| `EVENT_PUBLISHER` | `log` | no | `log` writes domain events to the structured log only. `kafka` (case-insensitive) also publishes them: to `warehouse.labor-performance.analytics` (all three events) and `warehouse.labor-performance.events` (`TaskPerformanceRecorded` only). With `DATABASE_URL` set, `kafka` goes through the transactional outbox (`outbox_events` + in-process relay, [ADR 0010](../adr/0010-transactional-outbox.md)). Without a database it writes straight to the broker. | `cmd/labor/main.go` | `config.eventPublisher` |
-| `OUTBOX_RELAY_INTERVAL` | `1s` | no | How long the relay sleeps after a pass that published fewer than 100 rows. Used only in outbox mode. | `cmd/labor/main.go` | `config.outboxRelayInterval` |
-| `OUTBOX_MAX_ATTEMPTS` | `20` | no | Failed sends after which the relay stops claiming an outbox row, so one poison row cannot block the relay forever ([ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)). `0` means unlimited. A negative or non-integer value logs `ignoring invalid integer env var` and uses `20`. The excluded row stays in `outbox_events`; re-arm it with `UPDATE outbox_events SET attempts = 0 WHERE id = ...` (see [Runbook](./runbook.md#re-arm-an-excluded-outbox-row)). Used only in outbox mode. | `cmd/labor/main.go` | `config.outboxMaxAttempts` |
-| `HOUSEKEEPING_INTERVAL` | `1h` | no | How often the housekeeping sweeper runs ([ADR 0023](../adr/0023-housekeeping-sweeper.md)). Only runs with `DATABASE_URL`. `0` (or negative) disables the sweeper. | `cmd/labor/main.go` | `config.housekeepingInterval` |
+| `KAFKA_BROKERS` | — | **yes** | Comma-separated brokers (surrounding spaces are trimmed; there is no `localhost:9092` default). Used by the `warehouse.fulfillment.events` consumer, its DLQ writer, the publishers, the relay sink and the `/readyz` broker check. Unset or blank exits at boot with `KAFKA_BROKERS is required: this context runs on real Kafka`. | `cmd/labor/config.go` | `kafka.brokers` (required by the chart; `kafka.enabled` is no longer a switch) |
+| `KAFKA_CONSUMER_GROUP` | — | **yes** | Consumer group id on `warehouse.fulfillment.events`. The consumer is always on. Unset or blank exits at boot with `KAFKA_CONSUMER_GROUP is required: this context runs on real Kafka`. | `cmd/labor/config.go` | `config.kafkaConsumerGroup` (required by the chart; infra sets `labor-performance`) |
+| `EVENT_PUBLISHER` | `kafka` | no | Kept only because the chart and warehouse-infra set it. Unset and `kafka` (case-insensitive) are accepted; `log` exits at boot with `EVENT_PUBLISHER=log is not supported: this context publishes to real Kafka` and anything else with `unknown EVENT_PUBLISHER`. Every domain event goes through the transactional outbox (`outbox_events` + the always-on in-process relay, [ADR 0010](../adr/0010-transactional-outbox.md)) to `warehouse.labor-performance.analytics` (all three events) and `warehouse.labor-performance.events` (`TaskPerformanceRecorded` only). | `cmd/labor/config.go` | `config.eventPublisher` (must be `kafka`) |
+| `OUTBOX_RELAY_INTERVAL` | `1s` | no | How long the relay sleeps after a pass that published fewer than 100 rows. | `cmd/labor/main.go` | `config.outboxRelayInterval` |
+| `OUTBOX_MAX_ATTEMPTS` | `20` | no | Failed sends after which the relay stops claiming an outbox row, so one poison row cannot block the relay forever ([ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)). `0` means unlimited. A negative or non-integer value logs `ignoring invalid integer env var` and uses `20`. The excluded row stays in `outbox_events`; re-arm it with `UPDATE outbox_events SET attempts = 0 WHERE id = ...` (see [Runbook](./runbook.md#re-arm-an-excluded-outbox-row)). | `cmd/labor/main.go` | `config.outboxMaxAttempts` |
+| `HOUSEKEEPING_INTERVAL` | `1h` | no | How often the housekeeping sweeper runs ([ADR 0023](../adr/0023-housekeeping-sweeper.md)). `0` (or negative) disables the sweeper. | `cmd/labor/main.go` | `config.housekeepingInterval` |
 | `IDEMPOTENCY_KEY_TTL` | `24h` | no | Age after which `idempotency_keys` rows are deleted. A retry older than this is treated as a new request. `0` (or negative) keeps keys forever. | `cmd/labor/main.go` | `config.idempotencyKeyTtl` |
 | `OUTBOX_RETENTION` | `168h` (7 days) | no | Age after which **published** `outbox_events` rows are deleted. Unpublished rows are never deleted. `0` (or negative) keeps published rows forever. | `cmd/labor/main.go` | `config.outboxRetention` |
 | `IDLE_GAP_CAP_SECONDS` | `3600` | no | Upper bound on a recorded idle gap. A longer gap is stored as the cap with `capped = true` ([ADR 0014](../adr/0014-labor-utilization-idleness.md)). | `cmd/labor/main.go` (default in `internal/application/usecases/record_task_performance.go`) | — |
@@ -74,7 +82,7 @@ and cannot be configured.
 | --- | --- | --- | --- | --- | --- |
 | `ANALYTICS_DATABASE_URL` | — | **yes** | Read-write DSN of the analytical Postgres (`MaxConns` 5, `statement_timeout` 10s). The process exits with `ANALYTICS_DATABASE_URL is required` when it is unset. | `cmd/labor-projector/main.go` | secret key `ANALYTICS_DATABASE_URL` (`analytics.database.projectorUrl` or `analytics.database.existingSecret`) |
 | `ANALYTICS_MIGRATIONS_PATH` | `migrations/analytics` | no | Directory of the analytical `*.up.sql` files. The projector runs them at startup. | `cmd/labor-projector/main.go` | `analytics.migrationsPath` |
-| `KAFKA_BROKERS` | `localhost:9092` | no | Brokers for `warehouse.labor-performance.analytics`. | `cmd/labor-projector/main.go` | `kafka.brokers` (always set, even when `kafka.enabled=false`) |
+| `KAFKA_BROKERS` | — | **yes** | Brokers for `warehouse.labor-performance.analytics` (comma-separated; no `localhost:9092` default). Unset or blank exits at boot with `KAFKA_BROKERS is required: this context runs on real Kafka`, together with a missing `ANALYTICS_DATABASE_URL` in the same error. | `cmd/labor-projector/config.go` | `kafka.brokers` (required by the chart) |
 | `ADMIN_ADDR` | `:8091` | no | Listen address of the admin server, which serves only `GET /healthz`. | `cmd/labor-projector/main.go` | `analytics.projector.adminAddr` |
 | `LOG_LEVEL` | `info` | no | `debug`, `info`, `warn`/`warning` or `error` (case-insensitive). | `cmd/labor-projector/main.go` | — |
 | `OTEL_SERVICE_NAME` | `labor-performance-projector` | no | OTel `service.name`. | `cmd/labor-projector/main.go` | hard-coded `labor-performance-projector` when `otel.enabled=true` |
@@ -108,7 +116,7 @@ binaries can share one directory.
 | Variable | Default | Required? | Meaning | Read in | Chart value |
 | --- | --- | --- | --- | --- | --- |
 | `MCP_ADDR` | `:8090` | no | Listen address. The MCP Streamable HTTP endpoint is mounted at `/`, and `GET /healthz` returns `{"status":"ok"}`. | `cmd/mcp/main.go` | `mcp.httpAddr` |
-| `DATABASE_URL` | *(unset)* | no | OLTP Postgres DSN. Unset means in-memory repositories, which are empty and never populated, because only `cmd/labor` writes. | `cmd/mcp/main.go` | same secret as the api Deployment |
+| `DATABASE_URL` | — | **yes** | OLTP Postgres DSN. There is no in-memory mode: the process exits at boot with `DATABASE_URL is required: this context runs on real Postgres` when it is unset. | `cmd/mcp/main.go` | same secret as the api Deployment (required by the chart) |
 | `MIGRATIONS_DATABASE_URL` | value of `DATABASE_URL` | no | Direct DSN for the migration step only ([ADR 0020](../adr/0020-migrations-direct-postgres-connection.md)). | `cmd/mcp/main.go` | `database.migrationsExistingSecretKey` |
 | `MIGRATIONS_PATH` | `migrations` | no | OLTP migrations directory. | `cmd/mcp/main.go` | `config.migrationsPath` |
 | `LOG_LEVEL` | `info` | no | `debug`, `info`, `warn`/`warning` or `error` (case-insensitive, like the other binaries). Anything else means `info`. | `cmd/mcp/main.go` | `config.logLevel` |
