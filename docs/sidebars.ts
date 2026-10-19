@@ -116,6 +116,7 @@ const sidebars: SidebarsConfig = {
         'adr/0031-analytics-consumer-atomic-claim-and-retry',
         'adr/0032-outbox-relay-attempt-cap',
         'adr/0033-mcp-invocation-and-denial-counters',
+        'adr/0034-postgres-and-kafka-are-the-only-runtime',
       ],
     },
   ],

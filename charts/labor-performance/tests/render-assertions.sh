@@ -5,13 +5,23 @@ chart_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp_dir=$(mktemp -d)
 trap 'rm -r "$tmp_dir"' EXIT
 
-helm template labor-performance "$chart_dir" >"$tmp_dir/default.yaml"
+# The chart refuses to render without a database source, brokers and a
+# consumer group (ADR 0034); dummy values, never dialled.
+helm_template() {
+  helm template labor-performance "$chart_dir" \
+    --set database.url=postgres://u@example.invalid:5432/db \
+    --set kafka.brokers=kafka.example.invalid:9092 \
+    --set config.kafkaConsumerGroup=labor-performance \
+    "$@"
+}
+
+helm_template >"$tmp_dir/default.yaml"
 if grep -q 'name: labor-performance-frontend' "$tmp_dir/default.yaml"; then
   echo "frontend resources rendered while frontend.enabled=false" >&2
   exit 1
 fi
 
-helm template labor-performance "$chart_dir" \
+helm_template \
   --set frontend.enabled=true \
   --set frontend.image.tag=test >"$tmp_dir/enabled.yaml"
 
@@ -19,7 +29,7 @@ assert_component() {
   template=$1
   component=$2
   output=$3
-  helm template labor-performance "$chart_dir" \
+  helm_template \
     --set frontend.enabled=true \
     --set frontend.image.tag=test \
     --show-only "$template" >"$output"

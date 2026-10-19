@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -41,7 +42,7 @@ func TestBuildAdapters_RetriesTheDatabaseNotJustOnce(t *testing.T) {
 	}
 
 	if err == nil {
-		t.Fatal("an unreachable database must fail boot, never fall back to the in-memory repo")
+		t.Fatal("an unreachable database must fail boot, never fall back to anything else")
 	}
 	if elapsed < 3*time.Second {
 		t.Fatalf("buildAdapters gave up in %v — it is not retrying, so a single "+
@@ -52,21 +53,37 @@ func TestBuildAdapters_RetriesTheDatabaseNotJustOnce(t *testing.T) {
 	}
 }
 
-// With no DATABASE_URL the in-memory repo is correct and must cost
-// nothing: no dial, no backoff, no delay to a local run.
-func TestBuildAdapters_NoDatabaseURLUsesMemoryImmediately(t *testing.T) {
-	start := time.Now()
-	adapters, cleanup, err := buildAdapters(context.Background(), "", "", migrationsDirForTestMCP(t), quietLoggerMCP())
-	if err != nil {
-		t.Fatalf("buildAdapters: %v", err)
+// With no DATABASE_URL there is no in-memory fallback: buildAdapters refuses
+// at once (ADR 0034), without dialling or retrying anything, and run()
+// fails before telemetry and the listener with the same error.
+func TestBuildAdapters_NoDatabaseURLIsABootError(t *testing.T) {
+	tests := []struct {
+		name string
+		boot func(t *testing.T) error
+	}{
+		{"buildAdapters", func(t *testing.T) error {
+			_, cleanup, err := buildAdapters(context.Background(), "", "", migrationsDirForTestMCP(t), quietLoggerMCP())
+			if cleanup != nil {
+				cleanup()
+			}
+			return err
+		}},
+		{"run", func(t *testing.T) error {
+			t.Setenv("DATABASE_URL", "")
+			return run()
+		}},
 	}
-	defer cleanup()
-
-	if adapters.standards == nil {
-		t.Fatal("no repository returned")
-	}
-	if elapsed := time.Since(start); elapsed > time.Second {
-		t.Fatalf("the in-memory path took %v; it must not touch the network", elapsed)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start := time.Now()
+			err := tt.boot(t)
+			if !errors.Is(err, errNoDatabase) || !strings.Contains(err.Error(), "DATABASE_URL") {
+				t.Fatalf("error = %v, want errNoDatabase naming DATABASE_URL", err)
+			}
+			if elapsed := time.Since(start); elapsed > time.Second {
+				t.Fatalf("the refusal took %v; it must not touch the network", elapsed)
+			}
+		})
 	}
 }
 

@@ -57,6 +57,13 @@ func run() error {
 
 	rootCtx := context.Background()
 
+	// Fail fast, before telemetry, any connection and the listener: a
+	// missing mandatory variable is a boot error that names it (ADR 0034).
+	cfg, err := loadBootConfig()
+	if err != nil {
+		return err
+	}
+
 	serviceName := getenv("OTEL_SERVICE_NAME", "labor-performance-projector")
 	shutdownTelemetry, err := telemetry.Setup(rootCtx, serviceName, serviceVersion(),
 		getenv("OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.DefaultOTLPEndpoint))
@@ -72,19 +79,15 @@ func run() error {
 	}()
 
 	adminAddr := getenv("ADMIN_ADDR", ":8091")
-	analyticsURL := os.Getenv("ANALYTICS_DATABASE_URL")
-	if analyticsURL == "" {
-		return errMissingAnalyticsURL
-	}
-	kafkaBrokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
 	migrationsPath := getenv("ANALYTICS_MIGRATIONS_PATH", "migrations/analytics")
 
-	pool, err := openAnalyticsPool(rootCtx, logger, analyticsURL, migrationsPath)
+	pool, err := openAnalyticsPool(rootCtx, logger, cfg.analyticsURL, migrationsPath)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
 
+	kafkaBrokers := cfg.kafkaBrokers
 	consumer := newAnalyticsConsumer(kafkaBrokers, pool, logger)
 	defer func() {
 		if err := consumer.Close(); err != nil {

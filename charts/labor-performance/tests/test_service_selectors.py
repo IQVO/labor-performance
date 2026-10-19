@@ -24,6 +24,14 @@ from pathlib import Path
 
 CHART_DIR = Path(__file__).resolve().parents[1]
 
+# The chart refuses to render without a database source, brokers and a
+# consumer group (ADR 0034); dummy values, never dialled.
+REQUIRED = [
+    "--set", "database.url=postgres://u@example.invalid:5432/db",
+    "--set", "kafka.brokers=kafka.example.invalid:9092",
+    "--set", "config.kafkaConsumerGroup=labor-performance",
+]
+
 ENABLE_EVERYTHING = [
     "--set", "frontend.enabled=true",
     "--set", "analytics.enabled=true",
@@ -33,7 +41,7 @@ ENABLE_EVERYTHING = [
 
 def render(extra_args: list[str]) -> list[dict]:
     out = subprocess.run(
-        ["helm", "template", "labor-performance", str(CHART_DIR), *extra_args],
+        ["helm", "template", "labor-performance", str(CHART_DIR), *REQUIRED, *extra_args],
         capture_output=True, text=True, check=True,
     ).stdout
     try:

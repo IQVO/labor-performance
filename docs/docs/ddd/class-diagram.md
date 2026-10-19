@@ -370,7 +370,7 @@ Source: `cmd/labor/main.go`, `cmd/mcp/main.go`,
 `internal/adapters/**`, `internal/architecture/architecture_test.go`.
 Omitted: `adapters/kafka/cloudevents` and `adapters/kafka/otelkafka`
 (shared helpers), `outbound/bootretry`, and the per-port wiring of the
-in-memory adapters (`DATABASE_URL` unset swaps every Postgres adapter for
-its `memory` twin and drops the unit of work). Dotted arrows are "port
+in-memory adapters (test doubles only, never imported by a binary:
+[ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)). Dotted arrows are "port
 implemented by adapter"; the domain depends on nothing and the analytics
 package depends on nothing outside itself (arch-go).

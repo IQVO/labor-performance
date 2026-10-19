@@ -14,6 +14,8 @@ description: "A route-scoped, transactional Idempotency-Key HTTP middleware for 
 record. Ported from order-management's reference implementation
 (PR #105, ADR 0023), the fleet's canonical design for this capability.
 
+> **Runtime modes superseded by [ADR-0034](./0034-postgres-and-kafka-are-the-only-runtime.md).** The "nil pool in the in-memory dev configuration" case described below is retired for the shipped binary: Postgres is the only runtime, so the middleware is always on (the nil pool remains only in handler unit tests), `Idempotency-Key` is `required: true` in the spec, and a NUL in a body is rejected (400) before the middleware records the key.
+
 ## Context
 
 `POST /standards` (`DefineStandard`) is this service's **one true

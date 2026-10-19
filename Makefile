@@ -44,7 +44,7 @@ help:
 	@echo "  integration-kafka-testcontainers  Build-tagged Kafka consumer test with an isolated Testcontainers broker"
 	@echo "  bdd               godog/Gherkin acceptance tests"
 	@echo "  contract          scripts/contract-test.sh — Schemathesis vs apis/openapi.yaml"
-	@echo "                    (boots the service in-memory; needs st: pip install"
+	@echo "                    (boots the service on Postgres + Kafka: DATABASE_URL, KAFKA_BROKERS; needs st: pip install"
 	@echo "                     'schemathesis==4.28.0')"
 	@echo "  chart-test        Helm chart render + Service selector tests (helm + PyYAML)"
 	@echo "  arch-test         Architecture fitness tests (internal/architecture/)"
@@ -112,7 +112,9 @@ bdd:
 
 # Property-based contract tests against apis/openapi.yaml — mirrors the
 # `contract` CI job. Not part of check/check-all (needs Python tooling
-# installed); CI runs it as its own job on every push and PR.
+# installed AND a real Postgres + Kafka: export DATABASE_URL and
+# KAFKA_BROKERS, see the header of scripts/contract-test.sh); CI runs it as
+# its own job on every push and PR against service containers.
 contract:
 	./scripts/contract-test.sh
 
@@ -183,3 +185,4 @@ guide-lint: ## lint agent guides: skills load, references resolve, context budge
 
 harness-test: ## unit-test the agent hooks (pre/post/stop)
 	python3 scripts/harness/test_hook.py
+	python3 scripts/harness/test_red_issue.py

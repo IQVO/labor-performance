@@ -2,7 +2,7 @@
 id: quickstart
 title: Quickstart
 sidebar_label: Quickstart
-description: Build, test and run labor-performance locally — in memory, with Postgres, with the shared Kafka broker, the analytics pair and the MCP server — and the first calls to make.
+description: Build, test and run labor-performance locally — on the Postgres and Kafka that docker compose provides, the analytics pair and the MCP server — and the first calls to make.
 ---
 
 # Quickstart
@@ -20,15 +20,17 @@ description: Build, test and run labor-performance locally — in memory, with P
 | `kcat` | optional | publishing a test `TaskCompleted` |
 | lefthook | optional | git hooks (`lefthook install`) |
 
-The fleet runs **one** Kafka broker: the in-cluster broker that
-`warehouse-infra` deploys into the kind cluster, reachable from the host
-at `localhost:9092`. This repo's `docker-compose.yml` has no Kafka service.
+Postgres and Kafka are the only runtime ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)):
+`docker compose up -d --wait postgres kafka` starts a Postgres 16 and a
+single-node Kafka (KRaft) on `localhost:9092`. The kind cluster's broker also
+publishes on `localhost:9092`, so stop one of the two (or use a unique consumer
+group against the shared broker).
 
 ## Build and test
 
 ```bash
 make build        # go build ./...
-make test         # go test ./... -race (no DB, no broker)
+make test         # go test ./... -race (unit and BDD, over the in-memory test doubles; no DB, no broker)
 make check        # fmt-check vet build lint test
 make check-all    # check + coverage gate + arch-test + bdd
 make help         # every target
@@ -36,36 +38,32 @@ make help         # every target
 
 See [Testing](../development/testing.md) for the full list.
 
-## 1. Run in memory (no database, no broker)
+## 1. Run on Postgres and Kafka
 
 ```bash
-go run ./cmd/labor
-# {"level":"INFO","msg":"database url not configured; using in-memory adapters"}
-# {"level":"INFO","msg":"event publisher configured","publisher":"log","mode":"direct"}
-# {"level":"INFO","msg":"http server listening","addr":":8080"}
+docker compose up -d --wait postgres kafka   # Postgres 16 on localhost:5435, Kafka on localhost:9092
+export DATABASE_URL='postgres://labor:labor@localhost:5435/labor?sslmode=disable'
+export KAFKA_BROKERS=localhost:9092
+export KAFKA_CONSUMER_GROUP=labor-performance-local
+go run ./cmd/labor                 # applies migrations/0001..0006 at startup
 ```
 
-The REST API works fully. The Kafka consumer keeps retrying
-`localhost:9092` in the background without blocking HTTP. If the shared
-broker **is** reachable, the consumer joins the consumer group
-`labor-performance`, which is the in-cluster Deployment's group. To keep
-a local process from stealing partitions, set
-`KAFKA_CONSUMER_GROUP=labor-performance-local` (or any unique name), or
-point `KAFKA_BROKERS` at nothing.
-
-In memory there is no `Idempotency-Key` enforcement, no outbox and no
-sweeper, because all three need Postgres.
+There is no in-memory mode: without `DATABASE_URL`, `KAFKA_BROKERS` or
+`KAFKA_CONSUMER_GROUP` the process exits at once and the error names the
+variable. Migrations run automatically; the outbox relay, the consumer, the
+sweeper and the outbox-lag gauge always start. Use a unique
+`KAFKA_CONSUMER_GROUP` so a local process does not steal partitions from the
+in-cluster Deployment's group `labor-performance`.
 
 ## 2. First calls
 
-These responses were captured from an in-memory `cmd/labor` built from
-this branch. Timestamps will differ.
+Example responses against an empty database. Timestamps will differ.
 
 ```bash
 curl -s localhost:8080/healthz
 # {"status":"ok"}
 curl -s localhost:8080/readyz
-# {"status":"ready"}
+# {"status":"ready"}   (503 dependency-unavailable while Postgres or Kafka is down)
 
 curl -s -X POST localhost:8080/standards \
   -H 'Content-Type: application/json' \
@@ -97,34 +95,18 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 ```
 
 Always send a fresh `Idempotency-Key` on `POST /standards`. It is
-required as soon as `DATABASE_URL` is set, and reusing a key replays the
+always required (Postgres is always on), and reusing a key replays the
 first response ([ADR 0016](../adr/0016-idempotency-key-middleware.md)).
 The full contract is in the [API Reference](/docs/api-reference/rest/labor-performance-api).
 
-## 3. Run with Postgres
-
-```bash
-docker compose up -d postgres      # Postgres 16 on localhost:5435, user/password/db: labor
-export DATABASE_URL='postgres://labor:labor@localhost:5435/labor?sslmode=disable'
-go run ./cmd/labor                 # applies migrations/0001..0006 at startup
-```
-
-Migrations run automatically, and the sweeper and outbox-lag gauge
-start. `POST /standards` now returns `400 idempotency-key-required`
-when the header is missing.
-
-## 4. Ingest a `TaskCompleted` from the shared broker
+## 3. Ingest a `TaskCompleted`
 
 There is no seed script. Data comes in only through `POST /standards`
 and `TaskCompleted` events. To score a task, publish a CloudEvents 1.0
 structured-mode message:
 
 ```bash
-export KAFKA_BROKERS=localhost:9092
-export KAFKA_CONSUMER_GROUP=labor-performance-local
-go run ./cmd/labor
-
-# another terminal
+# with cmd/labor from step 1 running, in another terminal
 echo '{"specversion":"1.0","id":"'"$(uuidgen)"'","source":"/warehouse/fulfillment-execution","type":"com.warehouse.wes.fulfillment-execution.task.TaskCompleted","subject":"task-1","time":"2026-10-09T12:00:00Z","datacontenttype":"application/json","data":{"task_id":"task-1","station_id":"station-1","work_unit_id":"wu-1","associate_id":"assoc-1","duration_seconds":52,"task_type":"PICK"}}' \
   | kcat -P -b localhost:9092 -t warehouse.fulfillment.events \
       -H 'content-type=application/cloudevents+json; charset=UTF-8'
@@ -143,15 +125,15 @@ consumer (labor-performance, wes-work-planning) also sees what you
 publish. Use ids and subjects you can recognise and clean up after.
 :::
 
-## 5. Publish events and run the analytics pair
+## 4. Run the analytics pair
 
 ```bash
-export EVENT_PUBLISHER=kafka       # with DATABASE_URL: through the transactional outbox
-go run ./cmd/labor
+# cmd/labor from step 1 publishes through the transactional outbox onto
+# warehouse.labor-performance.analytics and warehouse.labor-performance.events
 
 docker compose up -d analytics-postgres   # localhost:5436, user/password/db: labor_analytics
 export ANALYTICS_DATABASE_URL='postgres://labor_analytics:labor_analytics@localhost:5436/labor_analytics?sslmode=disable'
-go run ./cmd/labor-projector       # ADMIN_ADDR :8091, runs migrations/analytics
+go run ./cmd/labor-projector       # needs KAFKA_BROKERS too; ADMIN_ADDR :8091, runs migrations/analytics
 go run ./cmd/labor-reports         # HTTP_ADDR :8092
 
 curl -s 'localhost:8092/reports/performance?from=2026-10-09T00:00:00Z&to=2026-10-10T00:00:00Z'
@@ -159,7 +141,7 @@ curl -s localhost:8092/reports/performance/freshness
 ```
 
 :::caution
-With `EVENT_PUBLISHER=kafka`, a local `cmd/labor` publishes onto the
+Against the shared broker, a local `cmd/labor` publishes onto the
 shared `warehouse.labor-performance.*` topics, which in-cluster
 `workforce-management` consumes. The projector's consumer group
 `labor-performance-analytics` is a constant. Against the shared broker,
@@ -168,10 +150,10 @@ of its partitions. Prefer running the analytics pair in the cluster, or
 against an isolated broker.
 :::
 
-## 6. Run the MCP server
+## 5. Run the MCP server
 
 ```bash
-MCP_ADDR=:8090 go run ./cmd/mcp    # add DATABASE_URL to read the same store as cmd/labor
+MCP_ADDR=:8090 go run ./cmd/mcp    # DATABASE_URL is required (the same store as cmd/labor)
 
 curl -s localhost:8090/healthz
 # {"status":"ok"}
@@ -184,10 +166,9 @@ curl -si localhost:8090/ \
 
 Send `notifications/initialized`, then `tools/list` or `tools/call` with
 the `Mcp-Session-Id` header. Tool inputs are in [MCP tools](../mcp/tools.md).
-Without `DATABASE_URL`, `cmd/mcp` has its **own** empty in-memory store,
-so tools return no data even when `cmd/labor` has some.
+`cmd/mcp` exits at boot without `DATABASE_URL`: it has no in-memory store.
 
-## 7. Docs site
+## 6. Docs site
 
 ```bash
 cd docs
@@ -201,7 +182,7 @@ regenerate the API reference with
 `npm run clean-api-docs:all && npm run gen-api-docs:all`. The CI job
 `docs-api-drift` fails on any diff.
 
-## 8. Operator remote (`web/`)
+## 7. Operator remote (`web/`)
 
 ```bash
 cd web && npm install && npm run dev     # http://localhost:5187
