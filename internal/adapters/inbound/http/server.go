@@ -36,22 +36,17 @@ type Server struct {
 	GetAssociateScorecard  *usecases.GetAssociateScorecard
 	GetTaskTypePerformance *usecases.GetTaskTypePerformance
 	GetUtilization         *usecases.GetUtilization
-	// IdempotencyPool, when non-nil, wires RequireIdempotencyKey onto
-	// POST /standards (see idempotency.go). A nil pool means "no
-	// transactional Postgres backing wired" (in-memory dev/test
-	// configuration) — the idempotency middleware needs a real
-	// pgxpool.Pool to begin its own transaction, so it is simply not
-	// applied in that case, mirroring this codebase's existing
-	// convention for every other optional Postgres-backed capability
-	// (UnitOfWork, the outbox relay) and order-management's identical
-	// IdempotencyPool field (PR #105 / ADR 0023).
+	// IdempotencyPool wires RequireIdempotencyKey onto POST /standards (see
+	// idempotency.go). The shipped binary always sets it (Postgres is the
+	// only runtime, ADR 0034); it is nil only in handler unit tests that
+	// build a Server without a database, where the middleware is skipped
+	// because it needs a real pgxpool.Pool to begin its own transaction.
 	IdempotencyPool *pgxpool.Pool
-	// Readiness backs GET /readyz (ADR-0017 §graceful shutdown): flipped
-	// to not-ready as the FIRST step of shutdown, distinct from
-	// /healthz (liveness, never flipped). Optional: a nil Readiness
-	// (every existing caller/test that predates this field) always
-	// reports ready, mirroring order-management's identical Readiness
-	// field (ADR-0025).
+	// Readiness backs GET /readyz: the drain gate flipped to not-ready as
+	// the FIRST step of shutdown plus the Postgres and Kafka checks
+	// (NewReadiness), distinct from /healthz (liveness, never flipped). The
+	// shipped binary always builds it with NewReadiness; a nil Readiness
+	// (handler unit tests) reports ready.
 	Readiness *Readiness
 }
 
@@ -82,6 +77,10 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 	r.Use(RequestLogger(logger))
 	r.Use(middleware.Recoverer)
 	r.Use(corsMiddleware())
+	// A NUL (U+0000) in the path or a body is a client error here, never a
+	// Postgres 22021 -> 500 (ADR 0034); it runs before the route-scoped
+	// idempotency middleware so a rejected request never records its key.
+	r.Use(rejectNUL)
 
 	// /healthz stays outside any route group; it never needed a
 	// credential and still doesn't now that REST auth is gone.
@@ -97,11 +96,10 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 	// resource-creation endpoint (DefineStandard mints a fresh
 	// StandardId server-side; a lost 201 response and a client retry
 	// would otherwise silently close-and-redefine the standard a
-	// second time). IdempotencyPool nil (in-memory dev/test
-	// configuration, no transactional Postgres backing) skips the
-	// middleware entirely, mirroring every other optional
-	// Postgres-backed capability's nil convention in this service. See
-	// docs/docs/adr/0016-idempotency-key-middleware.md.
+	// second time). The shipped binary always passes the Postgres pool
+	// (ADR 0034), so the Idempotency-Key check is always on there; a nil
+	// pool exists only so handler unit tests can build a Server without a
+	// database. See docs/docs/adr/0016-idempotency-key-middleware.md.
 	if s.IdempotencyPool != nil {
 		r.With(RequireIdempotencyKey(s.IdempotencyPool)).Post("/standards", s.handleDefineStandard)
 	} else {
