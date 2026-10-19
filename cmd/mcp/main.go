@@ -32,6 +32,7 @@ import (
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/postgres"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/system"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/telemetry"
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
@@ -97,7 +98,7 @@ func run() error {
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: adapters.performances},
 		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: adapters.performances},
 		GetStandard:            &usecases.GetStandard{Standards: adapters.standards},
-		GetUtilization:         &usecases.GetUtilization{Performances: adapters.performances, IdlePeriods: adapters.idlePeriods, Clock: memory.SystemClock{}},
+		GetUtilization:         &usecases.GetUtilization{Performances: adapters.performances, IdlePeriods: adapters.idlePeriods, Clock: system.Clock{}},
 	}
 	server := inboundmcp.NewServer(deps)
 	handler := newRouter(inboundmcp.Handler(server), serviceName)

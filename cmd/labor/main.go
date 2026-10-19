@@ -26,6 +26,7 @@ import (
 	outboundkafka "github.com/claudioed/labor-performance/internal/adapters/outbound/kafka"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/postgres"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/system"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/telemetry"
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
@@ -90,7 +91,7 @@ func run() error {
 
 	publisher, relay, closePublisher := buildEventPublisher(persistence, logger)
 	defer closePublisher()
-	clock := memory.SystemClock{}
+	clock := system.Clock{}
 
 	// Housekeeping sweeper (ADR-0023) + the outbox-lag gauge (ADR-0010's
 	// deferred follow-up), both no-ops without the Postgres backing. The
