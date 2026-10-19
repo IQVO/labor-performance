@@ -210,11 +210,10 @@ CloudEvents `id`, so a resend carries the same id and consumers dedupe
 on it. Outbox lag is exported as
 `labor_performance.outbox.lag_seconds` (see [Observability](./observability.md)).
 
-With `EVENT_PUBLISHER=kafka` but **no** database, the publishers write
-straight to Kafka and a broker error fails the request. With
-`EVENT_PUBLISHER=log`, which is the chart default, nothing reaches Kafka
-at all. That means neither the projector nor `workforce-management`
-receives events.
+There is no direct-to-Kafka path and no log-only mode
+([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)): every
+event goes through the outbox, so a broker outage delays events (and turns
+`/readyz` into 503) but never loses or fails an accepted write.
 
 ### Housekeeping sweeper
 

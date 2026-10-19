@@ -44,7 +44,7 @@ help:
 	@echo "  integration-kafka-testcontainers  Build-tagged Kafka consumer test with an isolated Testcontainers broker"
 	@echo "  bdd               godog/Gherkin acceptance tests"
 	@echo "  contract          scripts/contract-test.sh — Schemathesis vs apis/openapi.yaml"
-	@echo "                    (boots the service in-memory; needs st: pip install"
+	@echo "                    (boots the service on Postgres + Kafka: DATABASE_URL, KAFKA_BROKERS; needs st: pip install"
 	@echo "                     'schemathesis==4.28.0')"
 	@echo "  chart-test        Helm chart render + Service selector tests (helm + PyYAML)"
 	@echo "  arch-test         Architecture fitness tests (internal/architecture/)"
