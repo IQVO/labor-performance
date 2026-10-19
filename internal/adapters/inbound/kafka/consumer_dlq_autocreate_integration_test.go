@@ -18,6 +18,7 @@ import (
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/system"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
@@ -63,7 +64,7 @@ func TestConsumer_PoisonMessage_AutoCreatesMissingDeadLetterTopic(t *testing.T) 
 		Standards:    memory.NewStandardRepo(),
 		Processed:    memory.NewProcessedEventRepo(),
 		Events:       events.NewLogPublisher(nil),
-		Clock:        memory.SystemClock{},
+		Clock:        system.Clock{},
 	}
 	consumer := inboundkafka.NewConsumerForTopic(brokers,
 		fmt.Sprintf("labor-performance-dlq-autocreate-itest-%d", time.Now().UnixNano()), topic, recordTaskPerformance, nil)

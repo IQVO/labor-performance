@@ -21,6 +21,7 @@ import (
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/system"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
@@ -63,7 +64,7 @@ func TestConsumer_ProjectsRealBrokerMessages(t *testing.T) {
 		Standards:    standards,
 		Processed:    processed,
 		Events:       events.NewLogPublisher(nil),
-		Clock:        memory.SystemClock{},
+		Clock:        system.Clock{},
 	}
 
 	consumer := inboundkafka.NewConsumerForTopic(
@@ -144,7 +145,7 @@ func TestConsumer_RedeliveredCloudEventFiresOnce(t *testing.T) {
 		Standards:    standards,
 		Processed:    processed,
 		Events:       events.NewLogPublisher(nil),
-		Clock:        memory.SystemClock{},
+		Clock:        system.Clock{},
 	}
 
 	consumer := inboundkafka.NewConsumerForTopic(
