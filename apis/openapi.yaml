@@ -50,11 +50,14 @@ paths:
       operationId: getReadyz
       summary: Readiness probe
       description: >-
-        Distinct from liveness (GET /healthz): readiness flips to
-        not-ready as the FIRST step of a graceful shutdown drain
-        (503 with a problem body), so a Kubernetes readinessProbe stops
-        routing new traffic while in-flight requests finish. Liveness
-        never flips.
+        Distinct from liveness (GET /healthz). Ready means: the service is
+        not draining AND Postgres answers a ping AND a Kafka broker
+        answers a metadata request (reachability only; topics are never
+        required). The dependency verdict is cached for a few seconds.
+        Readiness flips to not-ready as the FIRST step of a graceful
+        shutdown drain (503 with a status body), so a Kubernetes
+        readinessProbe stops routing new traffic while in-flight requests
+        finish. Liveness never flips.
       responses:
         "200":
           description: The service is ready to receive traffic
@@ -68,7 +71,9 @@ paths:
                     example: ready
         "503":
           description: >-
-            The service is draining (shutdown in progress) and must not
+            The service is draining (shutdown in progress), or Postgres or
+            Kafka is not reachable (problem type `dependency-unavailable`,
+            the detail names the failing dependencies), and must not
             receive new traffic.
           content:
             application/problem+json:
@@ -87,10 +92,10 @@ paths:
 
 
         Idempotent retries: clients MUST always send a non-empty
-        `Idempotency-Key` header (any unique value per logical request)
-        when the Postgres backing is configured; a retried request with
-        the same key and body replays the original response byte-for-byte
-        instead of defining the standard a second time.
+        `Idempotency-Key` header (any unique value per logical request);
+        a retried request with the same key and body replays the original
+        response byte-for-byte instead of defining the standard a second
+        time.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKeyHeader"
       requestBody:
@@ -282,17 +287,16 @@ components:
     IdempotencyKeyHeader:
       name: Idempotency-Key
       in: header
-      required: false
+      required: true
       description: >
         A caller-minted unique key per logical request (e.g. a UUID).
-        Clients must always send a non-empty key on POST /standards: with
-        the Postgres backing configured, a retry carrying the same key and
-        an identical body replays the original stored response instead of
-        re-executing the create; the same key with a different body is
-        rejected with 422 idempotency-key-reused. Declared required: false
-        because the in-memory configuration accepts the request without a
-        key (no transactional backing to gate on) — never rely on that in
-        a real deployment.
+        Clients must always send a non-empty key on POST /standards: a
+        retry carrying the same key and an identical body replays the
+        original stored response instead of re-executing the create; the
+        same key with a different body is rejected with 422
+        idempotency-key-reused, and a missing or empty key is a 400
+        idempotency-key-required. Postgres is the only runtime, so the
+        check is on in every deployment.
       schema:
         type: string
     WindowQueryParam:

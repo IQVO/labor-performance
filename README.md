@@ -132,11 +132,11 @@ internal/
                                    sweeper.go — housekeeping (ADR 0023)
     outbound/bootretry/           boot-time dial retry for migrations/DB ping (ADR 0027)
     outbound/analyticsstore/      analytical DB: writer projection, read-only
-                                   reader, in-memory store for tests
-    outbound/memory/              in-memory repos for tests/local
-    outbound/events/              log publisher (the default)
+                                   reader, in-memory store (test double)
+    outbound/memory/              in-memory repos, test doubles only (never imported by a cmd)
+    outbound/events/              log publisher (test double / debugging aid; no binary wires it)
     outbound/kafka/               analytics + integration publishers, relay sink,
-                                   fan-out (EVENT_PUBLISHER=kafka)
+                                   fan-out (the relay sink is the production path)
     outbound/telemetry/           OTel traces/metrics/logs (copied from workforce-management)
   pgtx/                           the one tx-in-context mechanism shared by the
                                    idempotency middleware and the Postgres UnitOfWork
@@ -187,7 +187,7 @@ struct tags in the domain packages.
   `id`, not `TaskId`, since a task id could in principle be reused after a long
   time.
 - **Every write and its event commit together.** With Postgres and
-  `EVENT_PUBLISHER=kafka`, a use case's Saves, the `processed_events`
+  Kafka (the only runtime), a use case's Saves, the `processed_events`
   marker and the analytics event are one transaction: the event goes into
   an `outbox_events` row, and an in-process relay ships it to
   `warehouse.labor-performance.analytics` and
@@ -205,29 +205,29 @@ struct tags in the domain packages.
 
 ## Running locally
 
-### 1. Without a database or a broker (fastest)
+### 1. With Postgres and Kafka (the only runtime)
 
-With no `DATABASE_URL`, the service starts on the in-memory adapters and is
-fully functional over REST (the Kafka consumer still needs a broker to
-actually receive messages, but the process starts and serves regardless):
-
-```bash
-go run ./cmd/labor
-# {"level":"INFO","msg":"database url not configured; using in-memory adapters"}
-# {"level":"INFO","msg":"http server listening","addr":":8080"}
-# {"level":"INFO","msg":"kafka consumer starting", ...}
-```
-
-### 2. With Postgres
+Postgres and Kafka are the only runtime ([ADR 0034](docs/docs/adr/0034-postgres-and-kafka-are-the-only-runtime.md)):
+there is no in-memory mode, no log sink and no localhost default. `cmd/labor`
+exits at boot, naming the variable, when `DATABASE_URL`, `KAFKA_BROKERS` or
+`KAFKA_CONSUMER_GROUP` is missing. `docker-compose.yml` provides both
+dependencies (and the analytical Postgres):
 
 ```bash
-docker compose up -d postgres          # Postgres 16 on localhost:5435
+docker compose up -d --wait postgres kafka   # Postgres 16 on localhost:5435, Kafka on localhost:9092
 
-export DATABASE_URL='postgres://labor:***@localhost:5435/labor?sslmode=disable'
+export DATABASE_URL='postgres://labor:labor@localhost:5435/labor?sslmode=disable'
+export KAFKA_BROKERS=localhost:9092
+export KAFKA_CONSUMER_GROUP=labor-performance-local
 go run ./cmd/labor                     # migrations run automatically at startup
 ```
 
-### 3. With Docker
+`/readyz` answers 200 only while Postgres and a Kafka broker answer; `/healthz`
+is liveness only. Fast feedback without either dependency lives in the unit and
+BDD tests, which use the in-memory test doubles (`internal/adapters/outbound/memory`).
+
+
+### 2. With Docker
 
 A working `Dockerfile` builds a scratch-minimal, non-root image:
 
@@ -235,31 +235,40 @@ A working `Dockerfile` builds a scratch-minimal, non-root image:
 docker build -t labor-performance:local .
 docker run --rm -p 8080:8080 \
   -e DATABASE_URL='postgres://labor:***@host.docker.internal:5435/labor?sslmode=disable' \
+  -e KAFKA_BROKERS='host.docker.internal:9092' \
+  -e KAFKA_CONSUMER_GROUP=labor-performance-local \
   labor-performance:local
 curl -s localhost:8080/healthz
 ```
 
-### 4. With Helm (kind / any Kubernetes cluster)
+### 3. With Helm (kind / any Kubernetes cluster)
 
 ```bash
 helm install labor-performance charts/labor-performance \
-  --set database.url='postgres://labor:***@postgres:5432/labor?sslmode=disable'
+  --set database.url='postgres://labor:***@postgres:5432/labor?sslmode=disable' \
+  --set kafka.brokers=kafka:9092 \
+  --set config.kafkaConsumerGroup=labor-performance
 kubectl port-forward svc/labor-performance 8080:80
 curl -s localhost:8080/healthz
 ```
 
 See `charts/labor-performance/values.yaml` for the full configuration
-surface (`kafka.enabled`, `otel.enabled`, ingress, autoscaling, an
-`existingSecret` pattern for `DATABASE_URL`).
+surface (`otel.enabled`, ingress, autoscaling, an `existingSecret` pattern for
+`DATABASE_URL`). The chart refuses to render, naming the value, without a
+database source (`database.url` or `database.existingSecret`), `kafka.brokers`
+and `config.kafkaConsumerGroup`, and with `kafka.enabled=false` or
+`config.eventPublisher` other than `kafka`.
 
-### 5. Kafka consumer smoke test against the shared broker
+### 4. Kafka consumer smoke test
 
 ```bash
-# The fleet runs ONE Kafka broker: the in-cluster broker deployed by
-# warehouse-infra, whose external listener is reachable from the host at
-# localhost:9092 (this repo's docker-compose.yml has no Kafka service).
+# docker compose up -d --wait postgres kafka provides both (see 1.). Against the
+# fleet's in-cluster broker (warehouse-infra, reachable from the host at
+# localhost:9092) use a unique consumer group so a local process does not steal
+# partitions from the in-cluster Deployment.
+export DATABASE_URL='postgres://labor:labor@localhost:5435/labor?sslmode=disable'
 export KAFKA_BROKERS=localhost:9092
-export KAFKA_CONSUMER_GROUP=labor-performance
+export KAFKA_CONSUMER_GROUP=labor-performance-local
 go run ./cmd/labor
 
 # In another terminal, publish a TaskCompleted-shaped message using any
@@ -281,14 +290,14 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HTTP_ADDR` | `:8080` | Listen address. |
-| `DATABASE_URL` | *(unset)* | Postgres DSN. Unset ⇒ in-memory adapters. |
+| `DATABASE_URL` | *(required)* | Postgres DSN. Unset exits at boot: there is no in-memory mode (ADR 0034). |
 | `MIGRATIONS_DATABASE_URL` | *(falls back to `DATABASE_URL`)* | Direct (non-PgBouncer) DSN used only for the golang-migrate step ([ADR 0020](docs/docs/adr/0020-migrations-direct-postgres-connection.md)). |
 | `MIGRATIONS_PATH` | `migrations` | golang-migrate source directory. |
-| `KAFKA_BROKERS` | `localhost:9092` | Comma-separated broker addresses. |
-| `KAFKA_CONSUMER_GROUP` | `labor-performance` | Consumer group id on `warehouse.fulfillment.events`. |
-| `EVENT_PUBLISHER` | `log` | `log` or `kafka`. With `kafka`, domain events are fanned onto `warehouse.labor-performance.analytics` and `warehouse.labor-performance.events` (ADR 0013); when `DATABASE_URL` is also set they go through the transactional outbox (`outbox_events` + in-process relay, [ADR 0010](docs/docs/adr/0010-transactional-outbox.md)), otherwise straight to the broker. |
-| `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration; only used in outbox mode). |
-| `HOUSEKEEPING_INTERVAL` | `1h` | How often the housekeeping sweeper runs ([ADR 0023](docs/docs/adr/0023-housekeeping-sweeper.md)); only with `DATABASE_URL`. `0` disables it (a `0` TTL/retention below keeps those rows forever). |
+| `KAFKA_BROKERS` | *(required)* | Comma-separated broker addresses. No `localhost:9092` default. |
+| `KAFKA_CONSUMER_GROUP` | *(required)* | Consumer group id on `warehouse.fulfillment.events`. |
+| `EVENT_PUBLISHER` | `kafka` | Kept only because the chart and warehouse-infra set it: unset or `kafka`; `log` or anything else exits at boot. Domain events go through the transactional outbox (`outbox_events` + the always-on in-process relay, [ADR 0010](docs/docs/adr/0010-transactional-outbox.md)) onto `warehouse.labor-performance.analytics` and `warehouse.labor-performance.events` (ADR 0013). |
+| `OUTBOX_RELAY_INTERVAL` | `1s` | How long the outbox relay sleeps between passes that found nothing to publish (Go duration). |
+| `HOUSEKEEPING_INTERVAL` | `1h` | How often the housekeeping sweeper runs ([ADR 0023](docs/docs/adr/0023-housekeeping-sweeper.md)); `0` disables it (a `0` TTL/retention below keeps those rows forever). |
 | `IDEMPOTENCY_KEY_TTL` | `24h` | Age after which `idempotency_keys` rows are swept (ADR 0016/0023). |
 | `OUTBOX_RETENTION` | `168h` (7d) | Age after which PUBLISHED `outbox_events` rows are swept; unpublished rows are never swept. |
 | `IDLE_GAP_CAP_SECONDS` | `3600` | Upper bound on a recorded idle gap (a capped gap is stored with `capped: true`); malformed/non-positive values fall back to the default ([ADR 0014](docs/docs/adr/0014-labor-utilization-idleness.md)). |
@@ -307,12 +316,12 @@ The other binaries read the same `LOG_LEVEL`/`OTEL_EXPORTER_OTLP_ENDPOINT`/`SERV
 | --- | --- | --- | --- |
 | `cmd/labor-projector` | `ANALYTICS_DATABASE_URL` | *(required)* | Analytical Postgres DSN (the only writer). |
 | `cmd/labor-projector` | `ANALYTICS_MIGRATIONS_PATH` | `migrations/analytics` | Analytical schema migrations. |
-| `cmd/labor-projector` | `KAFKA_BROKERS` | `localhost:9092` | Broker for `warehouse.labor-performance.analytics`. |
+| `cmd/labor-projector` | `KAFKA_BROKERS` | *(required)* | Broker for `warehouse.labor-performance.analytics`. |
 | `cmd/labor-projector` | `ADMIN_ADDR` | `:8091` | `/healthz` listener. |
 | `cmd/labor-reports` | `ANALYTICS_DATABASE_URL` | *(required)* | Analytical Postgres DSN (read-only pool). |
 | `cmd/labor-reports` | `HTTP_ADDR` | `:8092` | Reports API listener. |
 | `cmd/mcp` | `MCP_ADDR` | `:8090` | Streamable HTTP listener. |
-| `cmd/mcp` | `DATABASE_URL` / `MIGRATIONS_DATABASE_URL` / `MIGRATIONS_PATH` | *(unset)* / *(falls back to `DATABASE_URL`)* / `migrations` | Same OLTP store as `cmd/labor`; unset ⇒ in-memory. |
+| `cmd/mcp` | `DATABASE_URL` / `MIGRATIONS_DATABASE_URL` / `MIGRATIONS_PATH` | *(required)* / *(falls back to `DATABASE_URL`)* / `migrations` | Same OLTP store as `cmd/labor`; `DATABASE_URL` unset exits at boot. |
 
 None of the binaries exposes a Prometheus `/metrics` endpoint: metrics are
 pushed over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (ADR 0008).
@@ -331,7 +340,7 @@ Six endpoints plus liveness and readiness probes. The full contract, including t
 | `GET` | `/task-types/{taskType}/utilization?window=1h` | GetUtilization (ADR 0014) |
 | `GET` | `/associates/{associateId}/utilization?window=1h` | GetUtilization (ADR 0014) |
 | `GET` | `/healthz` | Liveness probe |
-| `GET` | `/readyz` | Readiness probe — flips to 503 as the first step of graceful shutdown ([ADR 0017](docs/docs/adr/0017-kafka-dlq-and-graceful-shutdown.md)) |
+| `GET` | `/readyz` | Readiness probe — 200 only while Postgres and a Kafka broker answer; flips to 503 as the first step of graceful shutdown ([ADR 0017](docs/docs/adr/0017-kafka-dlq-and-graceful-shutdown.md), [ADR 0034](docs/docs/adr/0034-postgres-and-kafka-are-the-only-runtime.md)) |
 
 The read-only reports API (`cmd/labor-reports`,
 [`apis/openapi-reports.yaml`](apis/openapi-reports.yaml)) serves

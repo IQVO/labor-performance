@@ -28,6 +28,14 @@ from pathlib import Path
 
 CHART = Path(__file__).resolve().parents[1]
 
+# The chart refuses to render without a database source, brokers and a
+# consumer group (ADR 0034); dummy values, never dialled.
+REQUIRED = [
+    "--set", "database.url=postgres://u@example.invalid:5432/db",
+    "--set", "kafka.brokers=kafka.example.invalid:9092",
+    "--set", "config.kafkaConsumerGroup=labor-performance",
+]
+
 FORBIDDEN_PLUGINS = {
     "basic-auth", "key-auth", "jwt", "oauth2", "oidc", "acl",
     "hmac-auth", "ldap-auth", "mtls", "session", "request-termination",
@@ -59,7 +67,7 @@ ENABLE_KONG = [
 
 def render(extra_args: list[str]) -> list[dict]:
     out = subprocess.run(
-        ["helm", "template", "labor-performance", str(CHART), *extra_args],
+        ["helm", "template", "labor-performance", str(CHART), *REQUIRED, *extra_args],
         capture_output=True, text=True, check=True,
     ).stdout
     try:

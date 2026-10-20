@@ -11,10 +11,9 @@ description: UML sequence diagrams for Labor Performance's use cases — DefineS
 One diagram per use case or group of use cases, drawn from the function
 bodies. Participants are the inbound adapter, the use case, the domain
 aggregate, the repositories (ports with their Postgres adapters), the
-outbox and the downstream. Error branches are `alt` blocks. When
-`DATABASE_URL` is unset the same use cases run on the in-memory adapters
-with no unit of work and the log publisher; these diagrams show the
-Postgres + `EVENT_PUBLISHER=kafka` configuration.
+outbox and the downstream. Error branches are `alt` blocks. The binaries run only on
+Postgres and Kafka ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md));
+the same use cases run over in-memory test doubles in unit and BDD tests.
 
 ## 1. DefineStandard — `POST /standards`
 

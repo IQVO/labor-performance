@@ -20,6 +20,8 @@ is `fulfillment-execution` (its own ADR-0008); this record is
 `labor-performance` adopting that same decision, adapted to a context that is
 a pure read-side reporter to the rest of the fleet.
 
+> **Runtime modes superseded by [ADR-0034](./0034-postgres-and-kafka-are-the-only-runtime.md).** "The same repository selection (in-memory vs Postgres) as `cmd/labor`" described below is retired: `cmd/mcp` requires `DATABASE_URL` and exits at boot without it.
+
 ## Context
 
 The platform is being connected to the AI ecosystem (Claude, Cursor, ChatGPT,

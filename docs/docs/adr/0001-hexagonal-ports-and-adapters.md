@@ -12,6 +12,8 @@ description: ADR 0001 — adopt ports & adapters with a strict inward-only depen
 
 Accepted. Established with the initial implementation of this bounded context.
 
+> **Runtime modes superseded by [ADR-0034](./0034-postgres-and-kafka-are-the-only-runtime.md).** The "fully functional service with in-memory adapters only" consequence described below is retired for the shipped binaries: they run on real Postgres and real Kafka only. The in-memory adapters remain as test doubles.
+
 ## Context
 
 Labor Performance is a **Supporting subdomain**, not a Core one: the value

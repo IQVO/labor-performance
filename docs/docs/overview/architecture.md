@@ -33,8 +33,9 @@ directions. `internal/architecture` enforces all of this in CI
 | `internal/adapters/outbound/postgres` | pgx repositories, `RunMigrations`, `UnitOfWork`, `OutboxPublisher`, `OutboxRelay`, `Sweeper`, and the outbox lag gauge. |
 | `internal/adapters/outbound/analyticsstore` | Analytical writer (`PostgresProjection`, `ConsumedEventsRepo`, `UnitOfWork`), the read-only `PostgresReport`, and an in-memory store. |
 | `internal/adapters/outbound/kafka` | `AnalyticsPublisher`, `IntegrationPublisher`, `RelaySink`, `FanOutPublisher` and the writer settings. |
-| `internal/adapters/outbound/events` | Log publisher, the default `EventPublisher`. |
-| `internal/adapters/outbound/memory` | In-memory repositories and the system clock, used when `DATABASE_URL` is unset and in tests. |
+| `internal/adapters/outbound/events` | Log publisher, a test double / debugging aid (no binary wires it). |
+| `internal/adapters/outbound/memory` | In-memory repositories, test doubles only (never imported by a `cmd/**` binary: ADR 0034 sensor). |
+| `internal/adapters/outbound/system` | The wall clock the binaries inject. |
 | `internal/adapters/outbound/telemetry` | OTel setup, the `labor_performance.standards.defined` counter and the trace-aware slog handler. |
 | `internal/adapters/outbound/bootretry` | Boot-time retry for migrations and the DB ping ([ADR 0027](../adr/0027-bootretry-and-startup-probe.md)). |
 | `internal/pgtx` | The one transaction-in-context mechanism, shared by the idempotency middleware and the Postgres `UnitOfWork`. |
@@ -125,9 +126,8 @@ because the code is the same.
 | --- | --- | --- | --- |
 | OLTP Postgres (`DATABASE_URL`, through PgBouncer in the fleet) | `cmd/labor` writes, `cmd/mcp` reads, and both migrate | `labor_standards`, `task_performances`, `processed_events`, `idle_periods`, `outbox_events`, `idempotency_keys` | `MaxConns` 10, `statement_timeout` 5s |
 | Analytical Postgres (`ANALYTICS_DATABASE_URL`, direct) | `cmd/labor-projector` writes and migrates, `cmd/labor-reports` reads | `labor_performance_rollup`, `analytics_processed_events`, `analytics_consumed_events` | writer 5 / 10s, reader 5 / 15s, read-only |
-| In-memory (`internal/adapters/outbound/memory`) | `cmd/labor` and `cmd/mcp` when `DATABASE_URL` is unset | — | — |
 
-Locally, `docker-compose.yml` provides both databases: OLTP Postgres 16
+Locally, `docker-compose.yml` provides both databases and a Kafka broker: OLTP Postgres 16
 on `localhost:5435` (`labor`/`labor`) and analytical Postgres 16 on
 `localhost:5436` (`labor_analytics`/`labor_analytics`). The ER diagram is in
 [Entity relationship](../ddd/entity-relationship.md).

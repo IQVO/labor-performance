@@ -14,6 +14,8 @@ Accepted.
 
 > **Envelope superseded by [ADR-0021](./0021-cloudevents-mandatory-event-envelope.md).** The flat envelope (`event_id`/`event_type`/`occurred_at`/`schema_version`) described below is retired: every message is now a CloudEvents 1.0 event. The rest of this decision stands.
 
+> **Runtime modes superseded by [ADR-0034](./0034-postgres-and-kafka-are-the-only-runtime.md).** The optional publisher (log by default, Kafka opt-in via `EVENT_PUBLISHER=kafka`) and the `localhost:9092` broker default are retired: the Kafka outbox is the only publisher, and `KAFKA_BROKERS` is required by `cmd/labor` and `cmd/labor-projector`. The rest of this decision stands.
+
 ## Context
 
 Every other bounded context in the warehouse-systems fleet ships a

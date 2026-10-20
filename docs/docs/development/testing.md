@@ -110,6 +110,17 @@ A separate feature file,
     `consumer_dlq_integration_test.go`, `consumer_dlq_autocreate_integration_test.go`,
     `analytics_consumer_integration_test.go`
   - integration publisher: `internal/adapters/outbound/kafka/integration_publisher_integration_test.go`
+  - the real runtime end to end ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)):
+    `cmd/labor/e2e_integration_test.go` (`TestRunOnRealPostgresAndKafka`) boots
+    `run()` on a Postgres and a Kafka container with only the deployment's
+    environment and drives REST and Kafka only; the NUL guard is pinned on real
+    Postgres by `TestNUL_IsAClientErrorAndDoesNotConsumeTheKey`
+- **Boot-config and sensor tests** (no containers, run in `make test`/`make arch-test`):
+  `cmd/labor/bootconfig_test.go`, `cmd/labor-projector/config_test.go`,
+  `cmd/mcp/wiring_test.go` (every mandatory variable is a boot error that names
+  it); `TestRuntimeBinaryHasNoInMemoryAdapters` and its
+  `TestRuntimeBinarySensorBites` in `internal/architecture` (no non-test file
+  under `cmd/**` imports `internal/adapters/outbound/memory`).
 - **Guard rails:** the fitness tests `TestPostgresIntegrationTestsUseTestcontainers`
   and `TestKafkaIntegrationTestsUseTestcontainers` fail the build if an
   integration test skips on `DATABASE_URL` or `KAFKA_BROKERS`, or
@@ -120,8 +131,11 @@ A separate feature file,
 
 - **Command:** `make contract` (`scripts/contract-test.sh`). CI job:
   `contract`. Needs `st`: `python3 -m pip install 'schemathesis==4.28.0'`.
-- **How:** builds `cmd/labor`, starts it in memory on `127.0.0.1:18083`
-  (`CONTRACT_PORT`), waits for `/healthz`, then runs
+- **How:** builds `cmd/labor`, starts it on `127.0.0.1:18083`
+  (`CONTRACT_PORT`) against a real Postgres and Kafka (`DATABASE_URL` and
+  `KAFKA_BROKERS` are required; CI provides `postgres:16` and
+  `confluent-local` service containers, locally `docker compose up -d --wait
+  postgres kafka`), waits for `/readyz`, then runs
   `st run apis/openapi.yaml --max-examples 100 --workers 4`
   (`CONTRACT_MAX_EXAMPLES` overrides the example count).
 - **Excluded operations:** `defineStandard` (the cross-field rule
@@ -190,6 +204,8 @@ A separate feature file,
 | `TestOutboxRelaysPassAttemptCap` (+ `TestOutboxRelayCapSensorFailsOnBadFixtures`) | Every non-test file under `cmd/` that calls `NewOutboxRelay` passes `WithMaxAttempts`, so the relay attempt cap is always explicit ([ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)). |
 | `TestMCPOptionalToolInputsCarryOmitempty` (+ `TestMCPOptionalToolInputsSensorFailsOnBadFixtures`) | An MCP tool input field whose `jsonschema` description says it is optional (the word "optional", or "when/if omitted") carries `omitempty` in its `json` tag. Without it the MCP SDK marks the field required and a call that leaves it out is rejected before the handler runs (gap fix D16). |
 | `TestKafkaWritersSetRequiredAcks` (+ `TestKafkaWriterAcksSensorBites`) | Every kafka-go `Writer` composite literal in a non-test file under `internal/` or `cmd/` sets `RequiredAcks` (the import alias is resolved per file). kafka-go defaults it to `RequireNone` (acks=0): the broker never confirms the write, so a broker blip silently drops the message while `WriteMessages` returns nil. The twin proves the sensor flags a bad fixture under any alias. |
+| `TestDeadLetterCallsGuardCancellation` (+ `TestDeadLetterShutdownSensorBites`, `kafka_dlq_shutdown_fitness_test.go`) | Every function in a non-test file under `internal/adapters/inbound/kafka` that sends to the dead-letter topic must reference `ctx.Err()` (any context-named value) or `context.Canceled` in its own body, or carry a `//dlq:deterministic <reason>` comment on the call line or the line above it. A handler that fails because the process is stopping must not dead-letter a good message and commit past it (network-fulfillment #89); a guard in the caller does not count. The sensor test proves the detector flags the pre-fix shape. |
+| `TestKafkaWriterTopicNotSetTwice` (+ `TestKafkaWriterTopicSensorBites`, `kafka_writer_topic_fitness_test.go`) | kafka-go rejects every write whose `Message.Topic` is set when the `Writer` also has a `Topic`. Per Go package under `internal/` and `cmd/`: once any kafka-go `Message` literal sets `Topic`, every `Writer` literal in that package must leave `Topic` empty, unless it carries `//kafka:fixed-topic-writer <reason>` and no Topic-setting Message is provably written through it. Writers configured after construction and `WriterConfig` are not covered. (Escape: warehouse-planning's domain DLQ writer, where no dead letter ever landed.) |
 
 ## Other CI jobs
 

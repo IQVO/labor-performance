@@ -7,6 +7,12 @@ export type TaskType = "PICK" | "PACK" | "SLAM";
 export interface Standard {
   taskType: TaskType;
   expectedSeconds: number;
+  /** Optional declaration of how much of expectedSeconds is travel
+   *  between locations (TravelComponentSeconds in the spec). Omitted
+   *  entirely -- never zero-defaulted -- when this standard never
+   *  declared one; the screen must render that absence as "not broken
+   *  out", not as 0s. */
+  travelComponentSeconds?: number | null;
   effectiveFrom: string;
   /** Present only on a superseded (closed) standard. */
   effectiveTo?: string | null;

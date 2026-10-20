@@ -19,6 +19,7 @@ import (
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/events"
 	"github.com/claudioed/labor-performance/internal/adapters/outbound/memory"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/system"
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
 )
@@ -102,7 +103,7 @@ func TestConsumer_ShutdownMidHandle_IsCleanAndDeadLettersNothing(t *testing.T) {
 		Standards:    memory.NewStandardRepo(),
 		Processed:    processed,
 		Events:       events.NewLogPublisher(nil),
-		Clock:        memory.SystemClock{},
+		Clock:        system.Clock{},
 	}
 	logs := &recordingHandler{}
 	consumer := inboundkafka.NewConsumerForTopic(brokers,
