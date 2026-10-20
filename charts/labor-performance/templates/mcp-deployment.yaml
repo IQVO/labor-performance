@@ -7,6 +7,8 @@ metadata:
     {{- include "labor-performance.labels" . | nindent 4 }}
     app.kubernetes.io/component: mcp
 spec:
+  {{- /* ADR 0034: cmd/mcp exits at boot without DATABASE_URL. */}}
+  {{- include "labor-performance.requireDatabase" . }}
   replicas: {{ .Values.mcp.replicaCount }}
   selector:
     matchLabels:
@@ -58,7 +60,7 @@ spec:
             - name: OTEL_SERVICE_NAME
               value: "labor-performance-mcp"
             {{- end }}
-            {{- if or .Values.database.url .Values.database.existingSecret }}
+            # Mandatory (ADR 0034): cmd/mcp exits at boot without it.
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -74,7 +76,6 @@ spec:
                   name: {{ include "labor-performance.databaseSecretName" . }}
                   key: {{ .Values.database.migrationsExistingSecretKey }}
                   optional: true
-            {{- end }}
             {{- end }}
             {{- range .Values.mcp.extraEnv }}
             - {{ toYaml . | nindent 14 | trim }}

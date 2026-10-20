@@ -25,15 +25,17 @@ All REST errors are RFC 7807 `application/problem+json` bodies with
 | Migrations fail intermittently on rollout with `unnamed prepared statement does not exist` or `canceling statement due to statement timeout` | `MIGRATIONS_DATABASE_URL` is unset, so migrations go through PgBouncer transaction pooling and golang-migrate's advisory lock does not hold ([ADR 0020](../adr/0020-migrations-direct-postgres-connection.md)). | `kubectl exec … env \| grep MIGRATIONS_DATABASE_URL` | Add the `MIGRATIONS_DATABASE_URL` key (direct DSN) to the database Secret. |
 | Boot fails with `Dirty database version N. Fix and force version.` | An earlier migration failed halfway and golang-migrate marked `schema_migrations` dirty. | `SELECT version, dirty FROM schema_migrations;` | Repair the schema by hand, then `migrate -path migrations -database "$MIGRATIONS_DATABASE_URL" force <N>`. |
 | `labor-projector` or `labor-reports` exits immediately with `ANALYTICS_DATABASE_URL is required` | `analytics.enabled=true` but neither `analytics.database.projectorUrl` nor `analytics.database.existingSecret` is set, so the chart rendered no Secret. | `kubectl get secret` for the analytics Secret. | Set the analytics DSN values or the existing Secret. |
-| Pod never becomes Ready, and the startup probe fails for 60s | Boot is still inside the retry budget, or the process exits before it listens (see the rows above). `/healthz` and `/readyz` are only served **after** migrations and the DB ping succeed. | `kubectl describe pod` (probe events) plus the logs. | Fix the dependency. Note that `/readyz` never checks Postgres or Kafka once the process is up. |
+| Pod never becomes Ready, and the startup probe fails for 60s | Boot is still inside the retry budget, or the process exits before it listens (see the rows above). `/healthz` and `/readyz` are only served **after** migrations and the DB ping succeed. | `kubectl describe pod` (probe events) plus the logs. | Fix the dependency. |
+| `/readyz` returns 503 `dependency-unavailable` while `/healthz` is 200 | Postgres did not answer a ping or no Kafka broker answered a metadata request ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)). The problem detail names the dependency. The verdict is cached 3s and each check is bounded to 2s. | `curl -s :8080/readyz`; then `psql` with the DSN, or `kafka-broker-api-versions.sh --bootstrap-server $KAFKA_BROKERS`. | Fix the dependency. Liveness is unaffected, so nothing restarts, and accepted writes wait in the outbox. Topics are not checked: brokers auto-create them on first write. |
 | `/readyz` returns 503 `{"status":"not_ready"}` | The pod received `SIGTERM` and is draining ([ADR 0017](../adr/0017-kafka-dlq-and-graceful-shutdown.md)). This is the only way readiness flips. | Pod is `Terminating`. | Expected. The pod exits within the 10s drain and the 30s grace period. |
-| Service starts but nothing persists across restarts | `DATABASE_URL` is empty, so the in-memory adapters are used. | Log line `database url not configured; using in-memory adapters`. | Set `database.url` or `database.existingSecret`. |
+| Process exits at once with `DATABASE_URL is required: this context runs on real Postgres`, `KAFKA_BROKERS is required: this context runs on real Kafka` or `KAFKA_CONSUMER_GROUP is required: this context runs on real Kafka` (`cmd/mcp`: `DATABASE_URL` only; `labor-projector`: `ANALYTICS_DATABASE_URL`, `KAFKA_BROKERS`) | Mandatory configuration is missing ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)): there is no in-memory mode, no log sink and no localhost default. Every missing variable is listed in the one error. | The first log line / exit message. | Set the variable (chart: `database.url` or `database.existingSecret`, `kafka.brokers`, `config.kafkaConsumerGroup`; the render fails without them). |
+| Process exits at once with `EVENT_PUBLISHER=log is not supported` or `unknown EVENT_PUBLISHER` | The variable is set to something other than `kafka`. | `kubectl exec … env \| grep EVENT_PUBLISHER` | Unset it or set `kafka` (`config.eventPublisher`). |
 
 ## Kafka ingestion (`warehouse.fulfillment.events`)
 
 | Symptom | Cause | Check | Fix |
 | --- | --- | --- | --- |
-| Scorecards stay 404 and task-type performance stays at `taskCount: 0` in the cluster | `kafka.enabled=false` (the chart default) leaves `KAFKA_BROKERS` unset, so the consumer dials `localhost:9092` inside the pod and never connects. | `kubectl exec … env \| grep KAFKA_BROKERS` | Set `kafka.enabled=true` and `kafka.brokers`. |
+| Scorecards stay 404 and task-type performance stays at `taskCount: 0` in the cluster | The producer of `warehouse.fulfillment.events` is not publishing, or `KAFKA_BROKERS` points at the wrong cluster. (The old "chart leaves `KAFKA_BROKERS` unset" cause is gone: the chart refuses to render without `kafka.brokers`.) | `kubectl exec … env \| grep KAFKA_BROKERS`; consumer group lag. | Fix `kafka.brokers` or the producer. |
 | Consumer group `labor-performance` lag grows | Slow DB (5s `statement_timeout`), every message taking all 3 attempts, or too few replicas for the partitions. | `kafka-consumer-groups.sh --describe --group labor-performance`. Look for `exhausted retries` log lines. | Fix the DB, or scale the api (HPA `autoscaling.api`, up to 4). Each extra replica takes partitions only while there are idle partitions. |
 | Messages land on `warehouse.fulfillment.events.dlq` | Either the message is not a valid CloudEvents 1.0 event (dead-lettered immediately), or `RecordTaskPerformance` failed 3 times. | Read the DLQ headers `x-dlq-error` and `x-dlq-failed-at`. | Poison message: fix the producer. Transient: fix the cause, then re-drive ([Runbook](./runbook.md#re-drive-dead-lettered-taskcompleted-messages)). |
 | Consumer process exits with `kafka: publish to dead-letter topic: …` | The DLQ write itself failed after about 10s of topic-not-ready retries, or the broker refused it. The offset is **not** committed, so nothing is lost. | Broker health, and topic auto-creation on the broker. | Fix the broker. The pod restarts and the message is redelivered. |
@@ -45,10 +47,9 @@ All REST errors are RFC 7807 `application/problem+json` bodies with
 
 | Symptom | Cause | Check | Fix |
 | --- | --- | --- | --- |
-| Projector, reports and `workforce-management` see no events at all | `EVENT_PUBLISHER=log`, which is the chart default (`config.eventPublisher`). | Log line `event publisher configured publisher=log`. | Set `config.eventPublisher=kafka`. |
+| Projector, reports and `workforce-management` see no events at all | The relay is publishing to a broker nobody reads, the projector is down, or rows are stuck in the outbox (next rows). The log publisher no longer exists ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)). | `SELECT count(*) FROM outbox_events WHERE published_at IS NULL;` and the projector logs. | Fix the broker or the projector. |
 | `labor_performance.outbox.lag_seconds` keeps climbing, with `outbox relay pass failed` errors | The broker is unreachable, or one row keeps failing. The relay stops at the failed row to keep per-key order, until that row reaches `OUTBOX_MAX_ATTEMPTS` (default 20). | `SELECT id, topic, attempts, last_error FROM outbox_events WHERE published_at IS NULL ORDER BY id LIMIT 5;` | Fix the broker. Rows publish by themselves on the next pass. |
 | ERROR `outbox relay: row reached the attempt cap ...`, and `outbox.lag_seconds` stays high although newer events flow | One row failed `OUTBOX_MAX_ATTEMPTS` times and is excluded from claims ([ADR 0032](../adr/0032-outbox-relay-attempt-cap.md)). The lag gauge still counts it, because it is unpublished. | The log line's `outbox_id`, `topic`, `event_type`, `key`; `last_error` on the row. | Fix the cause, then `UPDATE outbox_events SET attempts = 0 WHERE id = ...` ([Runbook](./runbook.md#re-arm-an-excluded-outbox-row)). |
-| `POST /standards` returns 500 with `kafka: publish …` while running without a database | `EVENT_PUBLISHER=kafka` with no `DATABASE_URL` publishes directly, and a broker error fails the request. | Logs. | Start the broker, or use `EVENT_PUBLISHER=log` for local in-memory runs. |
 | `GET /reports/performance/freshness` → `lagSeconds` keeps growing | The projector is down or stuck retrying a transient DB error (`analytics message handling failed; retrying`). It retries forever and never skips. | Projector logs, and group `labor-performance-analytics` lag. | Fix the analytical DB. If the read model is corrupt, rebuild it ([Runbook](./runbook.md#rebuild-the-analytical-read-model)). |
 | Report shows `meanEfficiencyPct: null` beside `tasksRecorded > 0` | Every task in the bucket was unscorable. | `tasksScored` is 0. | Expected. Null is never shown as 0%. |
 | Report with `taskType=pick` returns empty rows | The rollup key is normalised to upper case and the reader compares exactly. | Repeat with `taskType=PICK`. | Send the task type in upper case. |
@@ -58,14 +59,15 @@ All REST errors are RFC 7807 `application/problem+json` bodies with
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| 400 `idempotency-key-required` on `POST /standards` | The `Idempotency-Key` header is missing. It is required whenever `DATABASE_URL` is set ([ADR 0016](../adr/0016-idempotency-key-middleware.md)). | Send a fresh UUID per logical request. |
+| 400 `idempotency-key-required` on `POST /standards` | The `Idempotency-Key` header is missing. It is always required, since Postgres is always on ([ADR 0016](../adr/0016-idempotency-key-middleware.md)). | Send a fresh UUID per logical request. |
 | 422 `idempotency-key-reused` | The same key was sent with a **different** body. The SHA-256 hash of the body did not match the stored `request_hash`. | Use a new key for a genuinely new request. |
 | A retry returns exactly the first response again, even a 4xx | Same key and same body: the stored outcome is replayed. Every non-panic outcome is cached for `IDEMPOTENCY_KEY_TTL`. | Expected. To try again with different values, use a new key. |
 | 409 `concurrent-modification` | Two `DefineStandard` calls raced on the same prior standard, and the optimistic `version` check lost ([ADR 0022](../adr/0022-optimistic-concurrency-one-open-standard.md)). | Re-read with `GET /standards/{taskType}` and retry with a new key. |
 | 409 `standard-conflict` | The unique "one open standard per task type" index (23505) rejected a second open standard. | Same as above. |
 | 422 `non-positive-expected-seconds`, `negative-travel-component-seconds`, `travel-component-exceeds-expected-seconds` | The `LaborStandard` invariants rejected the values. These also count as `outcome=rejected` on the metric. | Fix the payload. |
 | 400 `unknown-task-type` | The task type is not PICK, PACK or SLAM (path or body). Matching is case-sensitive. | Use the upper-case enum. |
-| 400 `malformed-request-body` | The body is not valid JSON. | Fix the client. |
+| 400 `malformed-request-body` | The body is not valid JSON, or it contains a NUL (U+0000, raw or `\u0000`), which Postgres text cannot store. The key is not consumed. | Fix the client. |
+| 404 `resource-not-found` on a path with `%00` | A NUL in the path is rejected before routing. | Fix the client. |
 | 404 `associate-not-found` | The service has never recorded a task for that associate, or the id is empty. | Check that ingestion works (see Kafka above). |
 | 404 `standard-not-found` | No standard is currently open for that task type. | `POST /standards`. |
 | `?window=90` returns a 1h window | `window` is a Go duration (`90m`, `2h`). A bad value silently falls back to the 1h default instead of returning 400. | Send a unit. |
@@ -81,7 +83,8 @@ MCP calls, so nothing can trip one.
 | --- | --- | --- |
 | Clients get "session not found" or are re-initialised intermittently | `mcp.replicaCount > 1`. The go-sdk Streamable HTTP sessions live in memory and the Service has no session affinity. | Keep one replica. |
 | A tool returns an error such as `associateId is required` or `unknown task type…` | Input validation in `internal/adapters/inbound/mcp/tools.go`. The error is recorded on the `mcp.tool <name>` span. | Fix the arguments. See [MCP tools](../mcp/tools.md). |
-| Every tool returns not-found or empty data | `DATABASE_URL` is unset on the MCP Deployment, so it uses its own empty in-memory repositories. | Point it at the same OLTP Secret as the api. |
+| `cmd/mcp` exits at once with `DATABASE_URL is required` | There is no in-memory mode ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md)). | Point it at the same OLTP Secret as the api (the chart refuses to render `mcp.enabled` without one). |
+| Every tool returns not-found or empty data | The MCP Deployment points at a different database than the api. | Point it at the same OLTP Secret as the api. |
 
 ## Problem types
 
@@ -96,6 +99,8 @@ MCP calls, so nothing can trip one.
 | `non-positive-expected-seconds`, `negative-travel-component-seconds`, `travel-component-exceeds-expected-seconds` | 422 | `standard.New` |
 | `malformed-request-body` | 400 | JSON decode, or body read in the idempotency middleware |
 | `idempotency-key-required` | 400 | `RequireIdempotencyKey` |
+| `dependency-unavailable` | 503 | `/readyz` (Postgres or Kafka check failed) |
+| `resource-not-found` | 404 | NUL in the path (`rejectNUL`), unknown route |
 | `idempotency-key-reused` | 422 | `RequireIdempotencyKey` |
 | `invalid-report-query` | 400 | Reports API |
 | `report-store-error` | 500 | Reports API |

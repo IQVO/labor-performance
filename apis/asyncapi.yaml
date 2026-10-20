@@ -122,8 +122,8 @@ servers:
     protocol: kafka
     description: >-
       Shared Kafka broker for warehouse-systems integration events. Locally,
-      a broker is available at localhost:9092 via
-      ~/warehouse-systems/docker-compose.kafka.yml.
+      `docker compose up -d --wait kafka` in this repository provides one at
+      localhost:9092.
 
 defaultContentType: application/cloudevents+json
 

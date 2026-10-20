@@ -91,6 +91,7 @@ Typos, broken links and formatting are of course fair game.
 | [0031](./0031-analytics-consumer-atomic-claim-and-retry.md) | Analytics consumer: atomic claim + apply, commit after success, retry transient failures | Accepted |
 | [0032](./0032-outbox-relay-attempt-cap.md) | Outbox relay attempt cap (`OUTBOX_MAX_ATTEMPTS`) | Accepted |
 | [0033](./0033-mcp-invocation-and-denial-counters.md) | MCP tool invocation and denial counters (governance charter §9) | Accepted |
+| [0034](./0034-postgres-and-kafka-are-the-only-runtime.md) | Postgres and Kafka are the only runtime (no in-memory mode, no log sink, no optional relay or consumer) | Accepted |
 
 The Status column repeats each record's own `## Status` section. Four
 records whose bodies say plain **Accepted** have since been partly
@@ -101,7 +102,16 @@ overtaken. The Kafka envelope described in
 [0013](./0013-labor-performance-integration-events.md) was replaced by
 the CloudEvents 1.0 envelope of
 [0021](./0021-cloudevents-mandatory-event-envelope.md). Their other
-decisions still stand.
+decisions still stand. Separately, [0034](./0034-postgres-and-kafka-are-the-only-runtime.md)
+retired the in-memory runtime, the log publisher, the direct (non-outbox)
+publish path and the localhost broker default that
+[0001](./0001-hexagonal-ports-and-adapters.md),
+[0007](./0007-analytical-data-product.md),
+[0009](./0009-mcp-inbound-adapter.md),
+[0010](./0010-transactional-outbox.md),
+[0013](./0013-labor-performance-integration-events.md) and
+[0016](./0016-idempotency-key-middleware.md) describe; each of those carries
+a pointer.
 
 Each of these reconstructs a decision that is actually visible in this
 repository's history, `CLAUDE.md` or code — none is a generic placeholder.

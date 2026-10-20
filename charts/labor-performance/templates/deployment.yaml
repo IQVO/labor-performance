@@ -6,6 +6,8 @@ metadata:
     {{- include "labor-performance.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 spec:
+  {{- /* ADR 0034: every render-time requirement of the real runtime. */}}
+  {{- include "labor-performance.requireRealRuntime" . }}
   {{- if not .Values.autoscaling.api.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
@@ -72,9 +74,11 @@ spec:
               value: {{ .Values.config.kafkaConsumerGroup | quote }}
             - name: CORS_ALLOWED_ORIGINS
               value: {{ .Values.config.corsAllowedOrigins | quote }}
-            # Outbound event publishing (ADR-0010/0013) and the relay's
-            # drain interval, then the housekeeping sweeper envs
-            # (housekeeping-sweeper ADR). Empty values fall back to the
+            # Outbound event publishing (ADR-0010/0013): the only publisher is
+            # the Kafka transactional outbox (the binary rejects anything but
+            # kafka at boot, the chart refuses to render anything else). The
+            # relay's drain interval and the housekeeping sweeper envs
+            # (housekeeping-sweeper ADR) follow; empty values fall back to the
             # binary's own defaults.
             - name: EVENT_PUBLISHER
               value: {{ .Values.config.eventPublisher | quote }}
@@ -96,7 +100,8 @@ spec:
             - name: OTEL_SERVICE_NAME
               value: {{ .Values.otel.serviceName | quote }}
             {{- end }}
-            {{- if or .Values.database.url .Values.database.existingSecret }}
+            # Mandatory (ADR 0034): requireRealRuntime above refuses to render
+            # without a database source and without brokers.
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -116,11 +121,8 @@ spec:
                   key: {{ .Values.database.migrationsExistingSecretKey }}
                   optional: true
             {{- end }}
-            {{- end }}
-            {{- if .Values.kafka.enabled }}
             - name: KAFKA_BROKERS
               value: {{ .Values.kafka.brokers | quote }}
-            {{- end }}
             {{- range .Values.extraEnv }}
             - {{ toYaml . | nindent 14 | trim }}
             {{- end }}

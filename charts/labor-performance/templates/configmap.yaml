@@ -15,10 +15,9 @@ data:
   ENVIRONMENT: {{ .Values.environment | quote }}
   KAFKA_CONSUMER_GROUP: {{ .Values.config.kafkaConsumerGroup | quote }}
   CORS_ALLOWED_ORIGINS: {{ .Values.config.corsAllowedOrigins | quote }}
+  EVENT_PUBLISHER: {{ .Values.config.eventPublisher | quote }}
   {{- if .Values.otel.enabled }}
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.otel.endpoint | quote }}
   OTEL_SERVICE_NAME: {{ .Values.otel.serviceName | quote }}
   {{- end }}
-  {{- if .Values.kafka.enabled }}
   KAFKA_BROKERS: {{ .Values.kafka.brokers | quote }}
-  {{- end }}
