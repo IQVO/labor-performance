@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # --- runtime stage ---
 FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 RUN apk upgrade --no-cache && \
-    apk add --no-cache ca-certificates=20260909-r0 && \
+    apk add --no-cache ca-certificates=20261020-r0 && \
     addgroup -g 1000 -S app && adduser -u 1000 -S app -G app
 WORKDIR /app
 COPY --from=build --chown=app:app /out/labor ./labor
