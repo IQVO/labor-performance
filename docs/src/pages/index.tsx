@@ -22,7 +22,7 @@ function StudyDisclaimer() {
       ⚠️ <strong>Study project</strong> — an educational DDD exercise
       following real industry-standard patterns (WMS/WES/WCS, CloudEvents,
       RFC 7807, hexagonal architecture). Not a production system. Not
-      affiliated with, endorsed by, or representative of Amazon, Manhattan
+      affiliated with, endorsed by, or representative of Manhattan
       Associates, Blue Yonder, or any other company.
     </div>
   );
