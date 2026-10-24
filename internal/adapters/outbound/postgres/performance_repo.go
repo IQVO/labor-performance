@@ -25,10 +25,10 @@ func NewPerformanceRepo(pool *pgxpool.Pool) *PerformanceRepo {
 func (r *PerformanceRepo) Save(ctx context.Context, p *performance.TaskPerformance) error {
 	_, err := querierFrom(ctx, r.pool).Exec(ctx, `
 		INSERT INTO task_performances
-			(event_id, task_id, associate_id, task_type, actual_seconds, standard_seconds_at_completion, efficiency_pct, completed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			(event_id, task_id, associate_id, task_type, actual_seconds, standard_seconds_at_completion, efficiency_pct, completed_at, handling_unit, team_lift)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		ON CONFLICT (event_id) DO NOTHING
-	`, p.EventId(), p.TaskId(), string(p.AssociateId()), string(p.TaskType()), p.ActualSeconds(), p.StandardSecondsAtCompletion(), p.EfficiencyPct(), p.CompletedAt())
+	`, p.EventId(), p.TaskId(), string(p.AssociateId()), string(p.TaskType()), p.ActualSeconds(), p.StandardSecondsAtCompletion(), p.EfficiencyPct(), p.CompletedAt(), string(p.HandlingUnit()), p.TeamLift())
 	return err
 }
 
@@ -94,7 +94,7 @@ func (r *PerformanceRepo) TaskTypePerformanceFor(ctx context.Context, taskType s
 // first (ORDER BY completed_at DESC), capped at limit.
 func (r *PerformanceRepo) RecentByAssociateID(ctx context.Context, associateId shared.AssociateId, limit int) ([]*performance.TaskPerformance, error) {
 	rows, err := querierFrom(ctx, r.pool).Query(ctx, `
-		SELECT event_id, task_id, associate_id, task_type, actual_seconds, standard_seconds_at_completion, efficiency_pct, completed_at
+		SELECT event_id, task_id, associate_id, task_type, actual_seconds, standard_seconds_at_completion, efficiency_pct, completed_at, handling_unit, team_lift
 		FROM task_performances
 		WHERE associate_id = $1
 		ORDER BY completed_at DESC
@@ -107,15 +107,17 @@ func (r *PerformanceRepo) RecentByAssociateID(ctx context.Context, associateId s
 
 	out := make([]*performance.TaskPerformance, 0, limit)
 	for rows.Next() {
-		var eventId, taskId, assocId, taskType string
+		var eventId, taskId, assocId, taskType, handlingUnit string
+		var teamLift bool
 		var actualSeconds, standardSeconds int64
 		var efficiencyPct *float64
 		var completedAt time.Time
-		if err := rows.Scan(&eventId, &taskId, &assocId, &taskType, &actualSeconds, &standardSeconds, &efficiencyPct, &completedAt); err != nil {
+		if err := rows.Scan(&eventId, &taskId, &assocId, &taskType, &actualSeconds, &standardSeconds, &efficiencyPct, &completedAt, &handlingUnit, &teamLift); err != nil {
 			return nil, err
 		}
-		out = append(out, performance.Rehydrate(
+		out = append(out, performance.RehydrateWithHandling(
 			eventId, taskId, shared.AssociateId(assocId), shared.TaskType(taskType),
+			shared.HandlingUnit(handlingUnit), teamLift,
 			actualSeconds, standardSeconds, efficiencyPct, completedAt,
 		))
 	}

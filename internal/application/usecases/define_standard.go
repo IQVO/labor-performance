@@ -30,9 +30,38 @@ type DefineStandard struct {
 }
 
 func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType, expectedSeconds int64, travelComponentSeconds *int64) (*standard.LaborStandard, error) {
+	return uc.ExecuteSpec(ctx, DefineStandardSpec{TaskType: taskType, ExpectedSeconds: expectedSeconds, TravelComponentSeconds: travelComponentSeconds})
+}
+
+// TeamLiftSpec is the declared heavy-case rule of a CASE standard: a case
+// heavier than ThresholdG grams is a team lift scored against
+// ExpectedSeconds instead of the standard's own (ADR 0035).
+type TeamLiftSpec struct {
+	ThresholdG      int64
+	ExpectedSeconds int64
+}
+
+// DefineStandardSpec is everything DefineStandard can declare. HandlingUnit
+// "" declares the task-type-only standard (what Execute always did); EACH,
+// CASE or PALLET declares the more specific standard for that unit, which
+// wins over the task-type-only one when a completed task carries that unit.
+// TeamLift is optional and only valid for CASE.
+type DefineStandardSpec struct {
+	TaskType               shared.TaskType
+	HandlingUnit           shared.HandlingUnit
+	ExpectedSeconds        int64
+	TravelComponentSeconds *int64
+	TeamLift               *TeamLiftSpec
+}
+
+// ExecuteSpec defines (or revises) the standard for (spec.TaskType,
+// spec.HandlingUnit): the prior open standard of the SAME pair, if any, is
+// closed; standards of other handling units are untouched.
+func (uc *DefineStandard) ExecuteSpec(ctx context.Context, spec DefineStandardSpec) (*standard.LaborStandard, error) {
+	taskType, expectedSeconds, travelComponentSeconds := spec.TaskType, spec.ExpectedSeconds, spec.TravelComponentSeconds
 	now := uc.Clock.Now()
 
-	prior, err := uc.Standards.FindCurrentlyActive(ctx, taskType)
+	prior, err := uc.currentlyActive(ctx, taskType, spec.HandlingUnit)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +71,19 @@ func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType,
 		return nil, err
 	}
 
-	next, err := standard.New(id, taskType, expectedSeconds, travelComponentSeconds, now)
+	var teamLift *standard.TeamLift
+	if spec.TeamLift != nil {
+		tl, tlErr := standard.NewTeamLift(spec.TeamLift.ThresholdG, spec.TeamLift.ExpectedSeconds)
+		if tlErr != nil {
+			if uc.Metrics != nil {
+				uc.Metrics.StandardDefinitionRejected(ctx)
+			}
+			return nil, tlErr
+		}
+		teamLift = &tl
+	}
+
+	next, err := standard.NewForUnit(id, taskType, spec.HandlingUnit, expectedSeconds, travelComponentSeconds, teamLift, now)
 	if err != nil {
 		if uc.Metrics != nil {
 			uc.Metrics.StandardDefinitionRejected(ctx)
@@ -65,10 +106,17 @@ func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType,
 			return err
 		}
 
-		if prior != nil {
-			return uc.Events.Publish(ctx, shared.NewLaborStandardRevised(now, id, taskType, prior.ExpectedSeconds(), expectedSeconds, travelComponentSeconds, now))
+		var thresholdG, teamLiftSeconds *int64
+		if teamLift != nil {
+			t, s := teamLift.ThresholdG(), teamLift.ExpectedSeconds()
+			thresholdG, teamLiftSeconds = &t, &s
 		}
-		return uc.Events.Publish(ctx, shared.NewLaborStandardDefined(now, id, taskType, expectedSeconds, travelComponentSeconds, now))
+		if prior != nil {
+			return uc.Events.Publish(ctx, shared.NewLaborStandardRevised(now, id, taskType, prior.ExpectedSeconds(), expectedSeconds, travelComponentSeconds, now).
+				WithHandling(spec.HandlingUnit, thresholdG, teamLiftSeconds))
+		}
+		return uc.Events.Publish(ctx, shared.NewLaborStandardDefined(now, id, taskType, expectedSeconds, travelComponentSeconds, now).
+			WithHandling(spec.HandlingUnit, thresholdG, teamLiftSeconds))
 	})
 	if err != nil {
 		return nil, err
@@ -79,6 +127,16 @@ func (uc *DefineStandard) Execute(ctx context.Context, taskType shared.TaskType,
 	}
 
 	return next, nil
+}
+
+// currentlyActive loads the open standard of exactly (taskType, unit); the
+// task-type-only case goes through the original FindCurrentlyActive so the
+// pre-ADR-0035 path is unchanged.
+func (uc *DefineStandard) currentlyActive(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit) (*standard.LaborStandard, error) {
+	if unit == "" {
+		return uc.Standards.FindCurrentlyActive(ctx, taskType)
+	}
+	return uc.Standards.FindCurrentlyActiveForUnit(ctx, taskType, unit)
 }
 
 // atomically runs fn inside uow when one is wired, or directly otherwise.
