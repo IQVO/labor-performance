@@ -23,13 +23,17 @@ func statusFor(err error) int {
 		return http.StatusConflict
 
 	case errors.Is(err, shared.ErrUnknownTaskType),
+		errors.Is(err, shared.ErrUnknownHandlingUnit),
 		errors.Is(err, performance.ErrEmptyEventId),
 		errors.Is(err, performance.ErrEmptyTaskId):
 		return http.StatusBadRequest
 
 	case errors.Is(err, standard.ErrNonPositiveExpectedSeconds),
 		errors.Is(err, standard.ErrNegativeTravelComponentSeconds),
-		errors.Is(err, standard.ErrTravelComponentExceedsExpectedSeconds):
+		errors.Is(err, standard.ErrTravelComponentExceedsExpectedSeconds),
+		errors.Is(err, standard.ErrTeamLiftRequiresCaseUnit),
+		errors.Is(err, standard.ErrNonPositiveTeamLiftThreshold),
+		errors.Is(err, standard.ErrNonPositiveTeamLiftExpectedSeconds):
 		return http.StatusUnprocessableEntity
 
 	default:
@@ -68,6 +72,8 @@ func problemFor(err error) problemInfo {
 
 	case errors.Is(err, shared.ErrUnknownTaskType):
 		return problemInfo{"unknown-task-type", "Task type must be PICK, PACK, or SLAM"}
+	case errors.Is(err, shared.ErrUnknownHandlingUnit):
+		return problemInfo{"unknown-handling-unit", "Handling unit must be EACH, CASE, or PALLET"}
 	case errors.Is(err, performance.ErrEmptyEventId):
 		return problemInfo{"empty-event-id", "Kafka event id must not be empty"}
 	case errors.Is(err, performance.ErrEmptyTaskId):
@@ -79,6 +85,12 @@ func problemFor(err error) problemInfo {
 		return problemInfo{"negative-travel-component-seconds", "Travel component seconds must not be negative"}
 	case errors.Is(err, standard.ErrTravelComponentExceedsExpectedSeconds):
 		return problemInfo{"travel-component-exceeds-expected-seconds", "Travel component seconds must not exceed expected seconds"}
+	case errors.Is(err, standard.ErrTeamLiftRequiresCaseUnit):
+		return problemInfo{"team-lift-requires-case-unit", "A team lift can only be declared on a CASE handling-unit standard"}
+	case errors.Is(err, standard.ErrNonPositiveTeamLiftThreshold):
+		return problemInfo{"non-positive-team-lift-threshold", "Team lift threshold grams must be greater than zero"}
+	case errors.Is(err, standard.ErrNonPositiveTeamLiftExpectedSeconds):
+		return problemInfo{"non-positive-team-lift-expected-seconds", "Team lift expected seconds must be greater than zero"}
 
 	default:
 		return problemInfo{"internal-error", "An unexpected internal error occurred"}
