@@ -58,41 +58,31 @@ type problemInfo struct {
 // problemFor maps a typed domain/application error to its RFC 7807
 // (type, title) pair. Mirrors statusFor's error groupings one-for-one —
 // statusFor itself is untouched; this only decides what goes in the body.
+var problemTable = []struct {
+	sentinel error
+	info     problemInfo
+}{
+	{usecases.ErrStandardNotFound, problemInfo{"standard-not-found", "No active labor standard for this task type"}},
+	{usecases.ErrAssociateNotFound, problemInfo{"associate-not-found", "No task performance recorded for this associate"}},
+	{ports.ErrConcurrentModification, problemInfo{"concurrent-modification", "The standard was concurrently modified; reload and retry"}},
+	{ports.ErrOpenStandardConflict, problemInfo{"standard-conflict", "Another standard is already open for this task type"}},
+	{shared.ErrUnknownTaskType, problemInfo{"unknown-task-type", "Task type must be PICK, PACK, or SLAM"}},
+	{shared.ErrUnknownHandlingUnit, problemInfo{"unknown-handling-unit", "Handling unit must be EACH, CASE, or PALLET"}},
+	{performance.ErrEmptyEventId, problemInfo{"empty-event-id", "Kafka event id must not be empty"}},
+	{performance.ErrEmptyTaskId, problemInfo{"empty-task-id", "Task id must not be empty"}},
+	{standard.ErrNonPositiveExpectedSeconds, problemInfo{"non-positive-expected-seconds", "Expected seconds must be greater than zero"}},
+	{standard.ErrNegativeTravelComponentSeconds, problemInfo{"negative-travel-component-seconds", "Travel component seconds must not be negative"}},
+	{standard.ErrTravelComponentExceedsExpectedSeconds, problemInfo{"travel-component-exceeds-expected-seconds", "Travel component seconds must not exceed expected seconds"}},
+	{standard.ErrTeamLiftRequiresCaseUnit, problemInfo{"team-lift-requires-case-unit", "A team lift can only be declared on a CASE handling-unit standard"}},
+	{standard.ErrNonPositiveTeamLiftThreshold, problemInfo{"non-positive-team-lift-threshold", "Team lift threshold grams must be greater than zero"}},
+	{standard.ErrNonPositiveTeamLiftExpectedSeconds, problemInfo{"non-positive-team-lift-expected-seconds", "Team lift expected seconds must be greater than zero"}},
+}
+
 func problemFor(err error) problemInfo {
-	switch {
-	case errors.Is(err, usecases.ErrStandardNotFound):
-		return problemInfo{"standard-not-found", "No active labor standard for this task type"}
-	case errors.Is(err, usecases.ErrAssociateNotFound):
-		return problemInfo{"associate-not-found", "No task performance recorded for this associate"}
-
-	case errors.Is(err, ports.ErrConcurrentModification):
-		return problemInfo{"concurrent-modification", "The standard was concurrently modified; reload and retry"}
-	case errors.Is(err, ports.ErrOpenStandardConflict):
-		return problemInfo{"standard-conflict", "Another standard is already open for this task type"}
-
-	case errors.Is(err, shared.ErrUnknownTaskType):
-		return problemInfo{"unknown-task-type", "Task type must be PICK, PACK, or SLAM"}
-	case errors.Is(err, shared.ErrUnknownHandlingUnit):
-		return problemInfo{"unknown-handling-unit", "Handling unit must be EACH, CASE, or PALLET"}
-	case errors.Is(err, performance.ErrEmptyEventId):
-		return problemInfo{"empty-event-id", "Kafka event id must not be empty"}
-	case errors.Is(err, performance.ErrEmptyTaskId):
-		return problemInfo{"empty-task-id", "Task id must not be empty"}
-
-	case errors.Is(err, standard.ErrNonPositiveExpectedSeconds):
-		return problemInfo{"non-positive-expected-seconds", "Expected seconds must be greater than zero"}
-	case errors.Is(err, standard.ErrNegativeTravelComponentSeconds):
-		return problemInfo{"negative-travel-component-seconds", "Travel component seconds must not be negative"}
-	case errors.Is(err, standard.ErrTravelComponentExceedsExpectedSeconds):
-		return problemInfo{"travel-component-exceeds-expected-seconds", "Travel component seconds must not exceed expected seconds"}
-	case errors.Is(err, standard.ErrTeamLiftRequiresCaseUnit):
-		return problemInfo{"team-lift-requires-case-unit", "A team lift can only be declared on a CASE handling-unit standard"}
-	case errors.Is(err, standard.ErrNonPositiveTeamLiftThreshold):
-		return problemInfo{"non-positive-team-lift-threshold", "Team lift threshold grams must be greater than zero"}
-	case errors.Is(err, standard.ErrNonPositiveTeamLiftExpectedSeconds):
-		return problemInfo{"non-positive-team-lift-expected-seconds", "Team lift expected seconds must be greater than zero"}
-
-	default:
-		return problemInfo{"internal-error", "An unexpected internal error occurred"}
+	for _, row := range problemTable {
+		if errors.Is(err, row.sentinel) {
+			return row.info
+		}
 	}
+	return problemInfo{"internal-error", "An unexpected internal error occurred"}
 }

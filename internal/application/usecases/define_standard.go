@@ -2,6 +2,7 @@ package usecases
 
 import (
 	"context"
+	"time"
 
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
@@ -71,23 +72,14 @@ func (uc *DefineStandard) ExecuteSpec(ctx context.Context, spec DefineStandardSp
 		return nil, err
 	}
 
-	var teamLift *standard.TeamLift
-	if spec.TeamLift != nil {
-		tl, tlErr := standard.NewTeamLift(spec.TeamLift.ThresholdG, spec.TeamLift.ExpectedSeconds)
-		if tlErr != nil {
-			if uc.Metrics != nil {
-				uc.Metrics.StandardDefinitionRejected(ctx)
-			}
-			return nil, tlErr
-		}
-		teamLift = &tl
+	teamLift, err := uc.buildTeamLift(ctx, spec)
+	if err != nil {
+		return nil, err
 	}
 
 	next, err := standard.NewForUnit(id, taskType, spec.HandlingUnit, expectedSeconds, travelComponentSeconds, teamLift, now)
 	if err != nil {
-		if uc.Metrics != nil {
-			uc.Metrics.StandardDefinitionRejected(ctx)
-		}
+		uc.rejected(ctx)
 		return nil, err
 	}
 
@@ -106,17 +98,7 @@ func (uc *DefineStandard) ExecuteSpec(ctx context.Context, spec DefineStandardSp
 			return err
 		}
 
-		var thresholdG, teamLiftSeconds *int64
-		if teamLift != nil {
-			t, s := teamLift.ThresholdG(), teamLift.ExpectedSeconds()
-			thresholdG, teamLiftSeconds = &t, &s
-		}
-		if prior != nil {
-			return uc.Events.Publish(ctx, shared.NewLaborStandardRevised(now, id, taskType, prior.ExpectedSeconds(), expectedSeconds, travelComponentSeconds, now).
-				WithHandling(spec.HandlingUnit, thresholdG, teamLiftSeconds))
-		}
-		return uc.Events.Publish(ctx, shared.NewLaborStandardDefined(now, id, taskType, expectedSeconds, travelComponentSeconds, now).
-			WithHandling(spec.HandlingUnit, thresholdG, teamLiftSeconds))
+		return uc.publish(ctx, spec, id, prior, teamLift, now)
 	})
 	if err != nil {
 		return nil, err
@@ -147,4 +129,40 @@ func atomically(ctx context.Context, uow ports.UnitOfWork, fn func(ctx context.C
 		return fn(ctx)
 	}
 	return uow.Execute(ctx, fn)
+}
+
+// rejected counts a refused definition when metrics are wired.
+func (uc *DefineStandard) rejected(ctx context.Context) {
+	if uc.Metrics != nil {
+		uc.Metrics.StandardDefinitionRejected(ctx)
+	}
+}
+
+// buildTeamLift validates the optional team-lift declaration of a spec.
+func (uc *DefineStandard) buildTeamLift(ctx context.Context, spec DefineStandardSpec) (*standard.TeamLift, error) {
+	if spec.TeamLift == nil {
+		return nil, nil
+	}
+	tl, err := standard.NewTeamLift(spec.TeamLift.ThresholdG, spec.TeamLift.ExpectedSeconds)
+	if err != nil {
+		uc.rejected(ctx)
+		return nil, err
+	}
+	return &tl, nil
+}
+
+// publish emits Revised when a prior standard of the same pair was closed,
+// Defined otherwise, both carrying the handling unit and team lift.
+func (uc *DefineStandard) publish(ctx context.Context, spec DefineStandardSpec, id shared.StandardId, prior *standard.LaborStandard, teamLift *standard.TeamLift, now time.Time) error {
+	var thresholdG, teamLiftSeconds *int64
+	if teamLift != nil {
+		t, s := teamLift.ThresholdG(), teamLift.ExpectedSeconds()
+		thresholdG, teamLiftSeconds = &t, &s
+	}
+	if prior != nil {
+		return uc.Events.Publish(ctx, shared.NewLaborStandardRevised(now, id, spec.TaskType, prior.ExpectedSeconds(), spec.ExpectedSeconds, spec.TravelComponentSeconds, now).
+			WithHandling(spec.HandlingUnit, thresholdG, teamLiftSeconds))
+	}
+	return uc.Events.Publish(ctx, shared.NewLaborStandardDefined(now, id, spec.TaskType, spec.ExpectedSeconds, spec.TravelComponentSeconds, now).
+		WithHandling(spec.HandlingUnit, thresholdG, teamLiftSeconds))
 }
