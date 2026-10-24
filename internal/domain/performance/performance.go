@@ -34,6 +34,12 @@ type TaskPerformance struct {
 	standardSecondsAtCompletion int64
 	efficiencyPct               *float64
 	completedAt                 time.Time
+	// handlingUnit is the handling unit the completed task carried ("" when
+	// its event carried none) and teamLift whether the team-lift standard
+	// was the one StandardSecondsAtCompletion was resolved from. Both are
+	// frozen at ingestion like the standard itself (ADR 0004, ADR 0035).
+	handlingUnit shared.HandlingUnit
+	teamLift     bool
 }
 
 // New constructs a TaskPerformance, computing EfficiencyPct from
@@ -46,6 +52,14 @@ type TaskPerformance struct {
 // expected v1 case rather than an error. associateId may likewise be ""
 // when the completing station had no checked-in occupant.
 func New(eventId, taskId string, associateId shared.AssociateId, taskType shared.TaskType, actualSeconds, standardSecondsAtCompletion int64, completedAt time.Time) (*TaskPerformance, error) {
+	return NewWithHandling(eventId, taskId, associateId, taskType, "", false, actualSeconds, standardSecondsAtCompletion, completedAt)
+}
+
+// NewWithHandling is New for a completion that carried a handling unit:
+// handlingUnit is the unit the event carried ("" for none) and teamLift
+// whether standardSecondsAtCompletion is the team-lift standard (ADR 0035).
+// EfficiencyPct is computed exactly as New does.
+func NewWithHandling(eventId, taskId string, associateId shared.AssociateId, taskType shared.TaskType, handlingUnit shared.HandlingUnit, teamLift bool, actualSeconds, standardSecondsAtCompletion int64, completedAt time.Time) (*TaskPerformance, error) {
 	if eventId == "" {
 		return nil, ErrEmptyEventId
 	}
@@ -61,6 +75,8 @@ func New(eventId, taskId string, associateId shared.AssociateId, taskType shared
 		standardSecondsAtCompletion: standardSecondsAtCompletion,
 		efficiencyPct:               computeEfficiencyPct(actualSeconds, standardSecondsAtCompletion),
 		completedAt:                 completedAt,
+		handlingUnit:                handlingUnit,
+		teamLift:                    teamLift,
 	}, nil
 }
 
@@ -68,7 +84,15 @@ func New(eventId, taskId string, associateId shared.AssociateId, taskType shared
 // recomputing EfficiencyPct — the persisted value is trusted as-is so a
 // repository round-trip never silently changes a frozen historical fact.
 func Rehydrate(eventId, taskId string, associateId shared.AssociateId, taskType shared.TaskType, actualSeconds, standardSecondsAtCompletion int64, efficiencyPct *float64, completedAt time.Time) *TaskPerformance {
+	return RehydrateWithHandling(eventId, taskId, associateId, taskType, "", false, actualSeconds, standardSecondsAtCompletion, efficiencyPct, completedAt)
+}
+
+// RehydrateWithHandling is Rehydrate carrying the persisted handling unit
+// and team-lift flag.
+func RehydrateWithHandling(eventId, taskId string, associateId shared.AssociateId, taskType shared.TaskType, handlingUnit shared.HandlingUnit, teamLift bool, actualSeconds, standardSecondsAtCompletion int64, efficiencyPct *float64, completedAt time.Time) *TaskPerformance {
 	return &TaskPerformance{
+		handlingUnit:                handlingUnit,
+		teamLift:                    teamLift,
 		eventId:                     eventId,
 		taskId:                      taskId,
 		associateId:                 associateId,
@@ -102,3 +126,11 @@ func (p *TaskPerformance) ActualSeconds() int64               { return p.actualS
 func (p *TaskPerformance) StandardSecondsAtCompletion() int64 { return p.standardSecondsAtCompletion }
 func (p *TaskPerformance) EfficiencyPct() *float64            { return p.efficiencyPct }
 func (p *TaskPerformance) CompletedAt() time.Time             { return p.completedAt }
+
+// HandlingUnit is the handling unit the completed task carried, or "" when
+// its event carried none.
+func (p *TaskPerformance) HandlingUnit() shared.HandlingUnit { return p.handlingUnit }
+
+// TeamLift reports whether the task was scored against a team-lift
+// standard (a case heavier than the declared threshold).
+func (p *TaskPerformance) TeamLift() bool { return p.teamLift }

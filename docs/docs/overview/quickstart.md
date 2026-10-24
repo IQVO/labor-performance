@@ -81,6 +81,16 @@ curl -s -X POST localhost:8080/standards \
 curl -s localhost:8080/standards/PICK
 # 200 {"taskType":"PICK","expectedSeconds":40,"travelComponentSeconds":12,"effectiveFrom":"..."}
 
+# a case handle gets its own standard, with a heavy-case team lift (ADR 0035)
+curl -s -X POST localhost:8080/standards \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 6f1c2a9e-0000-4000-8000-000000000003' \
+  -d '{"taskType":"PICK","handlingUnit":"CASE","expectedSeconds":30,"teamLift":{"thresholdG":18000,"expectedSeconds":75}}'
+# 201 {"taskType":"PICK","handlingUnit":"CASE","expectedSeconds":30,"teamLift":{"thresholdG":18000,"expectedSeconds":75,"operators":2},"effectiveFrom":"..."}
+
+curl -s 'localhost:8080/standards/PICK?handlingUnit=EACH'
+# 200 the task-type-only PICK standard: EACH has none of its own, so the most specific one that exists answers
+
 curl -s localhost:8080/standards/pick
 # 400 application/problem+json  .../unknown-task-type  (task types are case-sensitive)
 

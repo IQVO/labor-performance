@@ -35,7 +35,7 @@ cited below.
 
 | Upstream | Protocol | Contract | How it is consumed | Failure behaviour |
 | --- | --- | --- | --- | --- |
-| `fulfillment-execution` | Kafka, CloudEvents 1.0 structured | Topic `warehouse.fulfillment.events`, type `com.warehouse.wes.fulfillment-execution.task.TaskCompleted`. `data` fields used: `task_id`, `associate_id`, `duration_seconds`, `task_type`. `station_id` and `work_unit_id` are decoded but not used. The completion instant is the CloudEvents `time`, and the dedupe key is the CloudEvents `id`. | `cmd/labor`, group `KAFKA_CONSUMER_GROUP` (default `labor-performance`). It is a Conformist to this shared fan-out topic. Every other `type` on the topic is ignored. | Invalid CloudEvent: straight to `warehouse.fulfillment.events.dlq` and committed. Handler error: 3 attempts, then DLQ and commit. DLQ or commit failure: the consumer stops, the pod restarts and the message is redelivered. Missing `associate_id`, `task_type` or duration degrade to unattributed, unclassified or unscored. They are never rejected. |
+| `fulfillment-execution` | Kafka, CloudEvents 1.0 structured | Topic `warehouse.fulfillment.events`, type `com.warehouse.wes.fulfillment-execution.task.TaskCompleted`. `data` fields used: `task_id`, `associate_id`, `duration_seconds`, `task_type`, plus the optional `handling_unit` and `weight_g` ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md); not published by `fulfillment-execution` today, absent means scored as before). `station_id` and `work_unit_id` are decoded but not used. The completion instant is the CloudEvents `time`, and the dedupe key is the CloudEvents `id`. | `cmd/labor`, group `KAFKA_CONSUMER_GROUP` (default `labor-performance`). It is a Conformist to this shared fan-out topic. Every other `type` on the topic is ignored. | Invalid CloudEvent: straight to `warehouse.fulfillment.events.dlq` and committed. Handler error: 3 attempts, then DLQ and commit. DLQ or commit failure: the consumer stops, the pod restarts and the message is redelivered. Missing `associate_id`, `task_type` or duration degrade to unattributed, unclassified or unscored. They are never rejected. |
 | Operators (`labor_mfe` remote, curl) | REST, `apis/openapi.yaml` | `POST /standards` with `Idempotency-Key` | `cmd/labor` | RFC 7807 errors ([Troubleshooting](../operations/troubleshooting.md#problem-types)). |
 
 Absent upstreams, on purpose:
@@ -45,6 +45,10 @@ Absent upstreams, on purpose:
   `travelComponentSeconds` can be supplied by the caller, for example
   from `facility-layout`'s travel estimate, but this service never fetches
   it ([ADR 0015](../adr/0015-optional-travel-component-on-labor-standard.md)).
+  The same holds for the optional handling unit and heavy-case team lift of a
+  standard ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)):
+  declared through `POST /standards`, never read from `product-master` or any
+  other context.
 - **No dependency on `workforce-management`** (shifts, paths) **or on
   `process-path-management`.** The fleet bans REST and MCP calls from
   this context to siblings.
@@ -75,11 +79,14 @@ verification. That is a test harness, not a runtime consumer.
 | `actual_seconds` | integer | |
 | `idle_seconds_before` | integer or null | Idle gap before this task. `null` = not observed. |
 | `completed_at` | RFC 3339 | Business time. Feeds the hour bucket. |
+| `handling_unit` | `EACH`, `CASE` or `PALLET` | Additive ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)). Present only when the completion carried a handling unit; omitted otherwise. |
+| `team_lift` | boolean | Additive. Present only with `handling_unit`: `true` when the CASE team-lift time scored the completion. |
 
 `LaborStandardDefined` / `LaborStandardRevised` (analytics topic only)
 carry `standard_id`, `task_type`, `expected_seconds`, `effective_from`,
-an optional `travel_component_seconds`, and on revisions
-`previous_expected_seconds`. The `subject` is the `StandardId`. Field
+an optional `travel_component_seconds`, the additive `handling_unit`,
+`team_lift_threshold_g` and `team_lift_expected_seconds` (only when
+declared, ADR 0035), and on revisions `previous_expected_seconds`. The `subject` is the `StandardId`. Field
 definitions are in [Domain events](../ddd/domain-events.md) and
 `apis/asyncapi.yaml`.
 

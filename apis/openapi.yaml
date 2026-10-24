@@ -91,6 +91,15 @@ paths:
         history, never an in-place overwrite.
 
 
+        A standard may optionally be declared for one handling unit
+        (`handlingUnit`: EACH, CASE or PALLET), so a case handle has its own
+        expected time distinct from an each pick. At most one standard is
+        open per (taskType, handlingUnit): defining a CASE standard never
+        closes the task-type-only one, and revising it closes only the prior
+        CASE standard. A CASE standard may also declare a heavy-case
+        `teamLift` (ADR 0035).
+
+
         Idempotent retries: clients MUST always send a non-empty
         `Idempotency-Key` header (any unique value per logical request);
         a retried request with the same key and body replays the original
@@ -104,6 +113,27 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/DefineStandardRequest"
+            examples:
+              taskTypeOnly:
+                summary: The task-type-only standard (unchanged behaviour)
+                value:
+                  taskType: PICK
+                  expectedSeconds: 45
+              casePick:
+                summary: A CASE pick standard, distinct from an each pick
+                value:
+                  taskType: PICK
+                  handlingUnit: CASE
+                  expectedSeconds: 30
+              heavyCaseTeamLift:
+                summary: A CASE standard with a declared heavy-case team lift
+                value:
+                  taskType: PICK
+                  handlingUnit: CASE
+                  expectedSeconds: 30
+                  teamLift:
+                    thresholdG: 18000
+                    expectedSeconds: 75
       responses:
         "201":
           description: Standard defined (or the revision recorded)
@@ -113,9 +143,9 @@ paths:
                 $ref: "#/components/schemas/Standard"
         "400":
           description: >
-            Unknown task type, malformed body, or a missing/empty
-            Idempotency-Key header on a route protected by the
-            idempotency middleware.
+            Unknown task type, unknown handling unit (not EACH, CASE or
+            PALLET), malformed body, or a missing/empty Idempotency-Key
+            header on a route protected by the idempotency middleware.
           content:
             application/problem+json:
               schema:
@@ -125,7 +155,8 @@ paths:
             The write lost a concurrency race: another writer modified the
             same labor standard after this request's snapshot
             (concurrent-modification), or another standard is already open
-            for this task type (standard-conflict). Re-fetch and retry.
+            for this task type and handling unit (standard-conflict).
+            Re-fetch and retry.
           content:
             application/problem+json:
               schema:
@@ -133,9 +164,12 @@ paths:
         "422":
           description: >-
             Expected seconds must be greater than zero, travelComponentSeconds
-            is negative or exceeds expectedSeconds, or the Idempotency-Key
-            header on this request was already used with a different request
-            body (idempotency-key-reused).
+            is negative or exceeds expectedSeconds, a teamLift is declared on
+            a standard whose handlingUnit is not CASE
+            (team-lift-requires-case-unit) or with a non-positive thresholdG
+            or expectedSeconds, or the Idempotency-Key header on this request
+            was already used with a different request body
+            (idempotency-key-reused).
           content:
             application/problem+json:
               schema:
@@ -149,17 +183,45 @@ paths:
         Returns the LaborStandard whose effective range currently covers
         "now" for this TaskType (EffectiveTo is null), or a 404 if none
         does.
+
+
+        Without `handlingUnit` the answer is the task-type-only standard,
+        exactly as before. With `handlingUnit` the answer is the standard
+        that APPLIES to that handle: the standard declared for exactly
+        (taskType, handlingUnit) when one is active, otherwise the
+        task-type-only standard (most specific wins, ADR 0035). The
+        returned body's own `handlingUnit` says which of the two answered
+        (absent = the task-type-only one).
       parameters:
         - $ref: "#/components/parameters/TaskTypePathParam"
+        - $ref: "#/components/parameters/HandlingUnitQueryParam"
       responses:
         "200":
-          description: The currently-active standard
+          description: The currently-active (resolved) standard
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Standard"
+              examples:
+                caseStandard:
+                  summary: ?handlingUnit=CASE with a CASE standard and a team lift
+                  value:
+                    taskType: PICK
+                    handlingUnit: CASE
+                    expectedSeconds: 30
+                    teamLift:
+                      thresholdG: 18000
+                      expectedSeconds: 75
+                      operators: 2
+                    effectiveFrom: "2026-10-24T08:00:00Z"
+                fallsBack:
+                  summary: ?handlingUnit=EACH with no EACH standard falls back
+                  value:
+                    taskType: PICK
+                    expectedSeconds: 45
+                    effectiveFrom: "2026-10-24T08:00:00Z"
         "400":
-          description: Unknown task type
+          description: Unknown task type or unknown handling unit
           content:
             application/problem+json:
               schema:
@@ -299,6 +361,16 @@ components:
         check is on in every deployment.
       schema:
         type: string
+    HandlingUnitQueryParam:
+      name: handlingUnit
+      in: query
+      required: false
+      description: >
+        EACH, CASE or PALLET. Resolves the standard that applies to this
+        handling unit (the unit's own standard, else the task-type-only
+        one). Absent or empty means the task-type-only standard.
+      schema:
+        $ref: "#/components/schemas/HandlingUnit"
     WindowQueryParam:
       name: window
       in: query
@@ -314,12 +386,52 @@ components:
       type: string
       enum: [PICK, PACK, SLAM]
       description: Mirrors fulfillment-execution's task.Type enum exactly.
+    HandlingUnit:
+      type: string
+      enum: [EACH, CASE, PALLET]
+      description: >-
+        The packaging level a standard is declared for, and that a completed
+        task handled (ADR 0035). INNER is deliberately absent: no flow
+        implements it in v1.
+    TeamLiftRequest:
+      type: object
+      required: [thresholdG, expectedSeconds]
+      description: >-
+        The declared heavy-case rule of a CASE standard: a case heavier than
+        thresholdG grams needs two operators and is scored against
+        expectedSeconds instead of the standard's own. Declarative input;
+        this service never looks a case weight up from a sibling context.
+      properties:
+        thresholdG:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Weight in grams ABOVE which a case needs a team lift
+            (a case weighing exactly thresholdG is still a one-operator lift).
+          example: 18000
+        expectedSeconds:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Engineered elapsed seconds of a team lift.
+          example: 75
+    TeamLift:
+      allOf:
+        - $ref: "#/components/schemas/TeamLiftRequest"
+        - type: object
+          properties:
+            operators:
+              type: integer
+              enum: [2]
+              description: Operators a team lift needs (constant).
     DefineStandardRequest:
       type: object
       required: [taskType, expectedSeconds]
       properties:
         taskType:
           $ref: "#/components/schemas/TaskType"
+        handlingUnit:
+          $ref: "#/components/schemas/HandlingUnit"
         expectedSeconds:
           type: integer
           format: int64
@@ -327,17 +439,23 @@ components:
           example: 45
         travelComponentSeconds:
           $ref: "#/components/schemas/TravelComponentSeconds"
+        teamLift:
+          $ref: "#/components/schemas/TeamLiftRequest"
     Standard:
       type: object
       properties:
         taskType:
           $ref: "#/components/schemas/TaskType"
+        handlingUnit:
+          $ref: "#/components/schemas/HandlingUnit"
         expectedSeconds:
           type: integer
           format: int64
           example: 45
         travelComponentSeconds:
           $ref: "#/components/schemas/TravelComponentSeconds"
+        teamLift:
+          $ref: "#/components/schemas/TeamLift"
         effectiveFrom:
           type: string
           format: date-time

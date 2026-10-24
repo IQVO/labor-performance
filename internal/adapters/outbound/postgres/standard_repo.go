@@ -14,9 +14,10 @@ import (
 	"github.com/claudioed/labor-performance/internal/domain/standard"
 )
 
-// oneOpenStandardIndex is the partial unique index (migration 0006) that
+// oneOpenStandardIndex is the partial unique index (migration 0006,
+// widened to (task_type, handling_unit) by migration 0007) that
 // enforces "at most one open (effective_to IS NULL) standard per
-// task_type" at the database level. A 23505 violation naming it is mapped
+// (task_type, handling_unit)" at the database level. A 23505 violation naming it is mapped
 // to ports.ErrOpenStandardConflict.
 const oneOpenStandardIndex = "idx_labor_standards_one_open_per_task_type"
 
@@ -46,13 +47,14 @@ func NewStandardRepo(pool *pgxpool.Pool) *StandardRepo {
 // either.
 func (r *StandardRepo) Save(ctx context.Context, s *standard.LaborStandard) error {
 	tag, err := execGuarded(ctx, r.pool, `
-		INSERT INTO labor_standards (id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version)
-		VALUES ($1, $2, $3, $4, $5, $6, 1)
+		INSERT INTO labor_standards (id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version, handling_unit, team_lift_threshold_g, team_lift_expected_seconds)
+		VALUES ($1, $2, $3, $4, $5, $6, 1, $8, $9, $10)
 		ON CONFLICT (id) DO UPDATE
 		  SET effective_to = EXCLUDED.effective_to,
 		      version = labor_standards.version + 1
 		WHERE labor_standards.version = $7
-	`, string(s.ID()), string(s.TaskType()), s.ExpectedSeconds(), s.TravelComponentSeconds(), s.EffectiveFrom(), s.EffectiveTo(), s.Version())
+	`, string(s.ID()), string(s.TaskType()), s.ExpectedSeconds(), s.TravelComponentSeconds(), s.EffectiveFrom(), s.EffectiveTo(), s.Version(),
+		string(s.HandlingUnit()), teamLiftThreshold(s), teamLiftSeconds(s))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == oneOpenStandardIndex {
@@ -96,23 +98,54 @@ func execGuarded(ctx context.Context, pool *pgxpool.Pool, sql string, args ...an
 	return tag, sp.Commit(ctx)
 }
 
+// teamLiftThreshold and teamLiftSeconds flatten the optional team lift into
+// the two nullable columns that persist it.
+func teamLiftThreshold(s *standard.LaborStandard) *int64 {
+	if tl := s.TeamLift(); tl != nil {
+		v := tl.ThresholdG()
+		return &v
+	}
+	return nil
+}
+
+func teamLiftSeconds(s *standard.LaborStandard) *int64 {
+	if tl := s.TeamLift(); tl != nil {
+		v := tl.ExpectedSeconds()
+		return &v
+	}
+	return nil
+}
+
+// FindActiveAsOf resolves the task-type-only standard (handling_unit = ”).
 func (r *StandardRepo) FindActiveAsOf(ctx context.Context, taskType shared.TaskType, t time.Time) (*standard.LaborStandard, error) {
+	return r.FindActiveAsOfForUnit(ctx, taskType, "", t)
+}
+
+func (r *StandardRepo) FindActiveAsOfForUnit(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit, t time.Time) (*standard.LaborStandard, error) {
 	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
-		SELECT id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version
+		SELECT id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version,
+		       handling_unit, team_lift_threshold_g, team_lift_expected_seconds
 		FROM labor_standards
 		WHERE task_type = $1
+		  AND handling_unit = $3
 		  AND effective_from <= $2
 		  AND (effective_to IS NULL OR effective_to > $2)
-	`, string(taskType), t)
+	`, string(taskType), t, string(unit))
 	return scanStandard(row)
 }
 
+// FindCurrentlyActive resolves the task-type-only open standard.
 func (r *StandardRepo) FindCurrentlyActive(ctx context.Context, taskType shared.TaskType) (*standard.LaborStandard, error) {
+	return r.FindCurrentlyActiveForUnit(ctx, taskType, "")
+}
+
+func (r *StandardRepo) FindCurrentlyActiveForUnit(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit) (*standard.LaborStandard, error) {
 	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
-		SELECT id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version
+		SELECT id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version,
+		       handling_unit, team_lift_threshold_g, team_lift_expected_seconds
 		FROM labor_standards
-		WHERE task_type = $1 AND effective_to IS NULL
-	`, string(taskType))
+		WHERE task_type = $1 AND handling_unit = $2 AND effective_to IS NULL
+	`, string(taskType), string(unit))
 	return scanStandard(row)
 }
 
@@ -125,15 +158,29 @@ func scanStandard(row pgx.Row) (*standard.LaborStandard, error) {
 		effectiveFrom          time.Time
 		effectiveTo            *time.Time
 		version                int
+		handlingUnit           string
+		thresholdG             *int64
+		teamLiftSeconds        *int64
 	)
-	err := row.Scan(&id, &taskType, &expectedSeconds, &travelComponentSeconds, &effectiveFrom, &effectiveTo, &version)
+	err := row.Scan(&id, &taskType, &expectedSeconds, &travelComponentSeconds, &effectiveFrom, &effectiveTo, &version,
+		&handlingUnit, &thresholdG, &teamLiftSeconds)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return standard.Rehydrate(shared.StandardId(id), shared.TaskType(taskType), expectedSeconds, travelComponentSeconds, effectiveFrom, effectiveTo, version), nil
+	var teamLift *standard.TeamLift
+	if thresholdG != nil && teamLiftSeconds != nil {
+		// The CHECK constraints of migration 0007 guarantee both are
+		// set together and positive, so NewTeamLift cannot fail here.
+		tl, err := standard.NewTeamLift(*thresholdG, *teamLiftSeconds)
+		if err != nil {
+			return nil, err
+		}
+		teamLift = &tl
+	}
+	return standard.RehydrateForUnit(shared.StandardId(id), shared.TaskType(taskType), shared.HandlingUnit(handlingUnit), expectedSeconds, travelComponentSeconds, teamLift, effectiveFrom, effectiveTo, version), nil
 }
 
 // NextID mints a standard id.

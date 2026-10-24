@@ -35,21 +35,26 @@ also not an application use case.
 - **Trigger:** `POST /standards` on `cmd/labor`. Never exposed over MCP.
 - **Inputs:** `taskType` (`PICK`, `PACK` or `SLAM`, validated by
   `shared.NewTaskType` in the HTTP adapter, 400 otherwise),
-  `expectedSeconds`, and an optional `travelComponentSeconds`. With a
+  `expectedSeconds`, an optional `travelComponentSeconds`, an optional
+  `handlingUnit` (`EACH`, `CASE`, `PALLET`) and, for `CASE` only, an optional
+  `teamLift` `{thresholdG, expectedSeconds}`
+  ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)). With a
   database, the `Idempotency-Key` header is required
   ([ADR 0016](../adr/0016-idempotency-key-middleware.md)).
 - **Steps:**
-  1. Load the currently active standard for the task type.
+  1. Load the currently active standard for the task type and handling unit
+     (the task-type-only standard when no `handlingUnit` is given).
   2. Mint a new `StandardId`.
   3. `standard.New` checks the invariants: `expectedSeconds > 0`,
-     `travelComponentSeconds >= 0`, and travel ≤ expected. A violation
+     `travelComponentSeconds >= 0`, travel ≤ expected, and a `teamLift` only on
+     `CASE` with a positive threshold and positive seconds. A violation
      returns 422 and records `labor_performance.standards.defined{outcome="rejected"}`.
   4. Atomically, close the prior standard at `now` (it is never
      overwritten), save the new one, and publish the event.
   5. Record `outcome="accepted"`.
 - **Concurrency invariants:** the `version` column gives optimistic
   locking on `Save` (409 `concurrent-modification`), and the unique
-  partial index allows one open standard per `task_type` (409
+  partial index allows one open standard per `task_type` and `handling_unit` (409
   `standard-conflict`) ([ADR 0022](../adr/0022-optimistic-concurrency-one-open-standard.md)).
 - **Events:** `LaborStandardDefined` when no standard was active,
   otherwise `LaborStandardRevised` (carrying `previous_expected_seconds`).
@@ -74,7 +79,13 @@ also not an application use case.
      (`FindActiveAsOf`), not the current one. If there is none, or the
      task type is unclassified, the standard is 0
      ([ADR 0004](../adr/0004-standard-frozen-at-completion-time-not-recomputed.md)).
-  3. `performance.New` requires a non-empty event id and task id.
+     When the request carries a handling unit, the standard for exactly
+     (task type, unit) is tried first and the task-type-only standard is the
+     fallback (most specific wins); a `CASE` standard with a team lift whose
+     threshold is strictly below the declared `WeightG` scores the completion
+     against the team-lift seconds
+     ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)).
+  3. `performance.NewWithHandling` requires a non-empty event id and task id.
      `EfficiencyPct = 100 × standard / actual`, or `nil` when either is
      ≤ 0. The value is frozen for good.
   4. Look up the associate's previous completion (skipped for an empty
@@ -98,9 +109,11 @@ also not an application use case.
 
 `internal/application/usecases/get_standard.go`
 
-- **Inputs:** `taskType`.
+- **Inputs:** `taskType`, and over REST an optional `handlingUnit` query.
 - **Returns:** the currently open `LaborStandard`, or
   `ErrStandardNotFound` (404 `standard-not-found`, or an MCP tool error).
+  With a handling unit, `ExecuteResolved` returns the unit's own standard,
+  else the task-type-only one (the MCP tool never passes a unit).
 
 ## GetAssociateScorecard
 

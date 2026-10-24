@@ -19,10 +19,10 @@ directions. `internal/architecture` enforces all of this in CI
 
 | Package | Role |
 | --- | --- |
-| `internal/domain/standard` | `LaborStandard` aggregate: TaskType → `ExpectedSeconds` (> 0) plus an optional `TravelComponentSeconds` (0 ≤ travel ≤ expected), and an effective range. |
+| `internal/domain/standard` | `LaborStandard` aggregate: TaskType → `ExpectedSeconds` (> 0) plus an optional `TravelComponentSeconds` (0 ≤ travel ≤ expected), an optional `HandlingUnit` (EACH, CASE, PALLET) with, for CASE, an optional `TeamLift` (ADR 0035), and an effective range. |
 | `internal/domain/performance` | `TaskPerformance` aggregate: one scored completion, with `EfficiencyPct = standard / actual × 100`, or `nil` when either side is ≤ 0. Also the pure `ClassifyTrend` (the recent mean of up to 10 tasks against the baseline, ±5 percentage points, needs at least 3 scored tasks) and `DetectCoachingFlag` (last 3 scored tasks all below 85%). |
 | `internal/domain/idleness` | `IdlePeriod` aggregate (gap between consecutive completions, capped) and `UtilizationPct`. |
-| `internal/domain/shared` | `TaskType` (PICK, PACK, SLAM), `AssociateId`, `StandardId`, the domain events `LaborStandardDefined`, `LaborStandardRevised` and `TaskPerformanceRecorded`, and shared errors. |
+| `internal/domain/shared` | `TaskType` (PICK, PACK, SLAM), `HandlingUnit` (EACH, CASE, PALLET), `AssociateId`, `StandardId`, the domain events `LaborStandardDefined`, `LaborStandardRevised` and `TaskPerformanceRecorded`, and shared errors. |
 | `internal/application/ports` | Outbound ports: `StandardRepo`, `PerformanceRepo`, `IdlePeriodRepo`, `ProcessedEvents`, `EventPublisher`, `UnitOfWork`, `Clock`, `StandardMetrics`. |
 | `internal/application/usecases` | `DefineStandard`, `GetStandard`, `RecordTaskPerformance`, `GetAssociateScorecard`, `GetTaskTypePerformance`, `GetUtilization` ([Use cases](../ddd/use-cases.md)). |
 | `internal/analytics/report` | Analytical read model (rollup rows, `Build`, normalisation to `UNCLASSIFIED`). It imports nothing from the OLTP layers. |

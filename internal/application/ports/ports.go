@@ -25,11 +25,23 @@ type StandardRepo interface {
 	Save(ctx context.Context, s *standard.LaborStandard) error
 	// FindActiveAsOf returns the LaborStandard for taskType whose
 	// effective range covers t ([EffectiveFrom, EffectiveTo)), or
-	// (nil, nil) if none does.
+	// (nil, nil) if none does. It considers ONLY task-type-only
+	// standards (handling unit ""): a standard declared for a handling
+	// unit is never returned here, which is what keeps the pre-ADR-0035
+	// behaviour byte-for-byte when no handling unit is involved.
 	FindActiveAsOf(ctx context.Context, taskType shared.TaskType, t time.Time) (*standard.LaborStandard, error)
-	// FindCurrentlyActive returns the LaborStandard for taskType that is
-	// active right now (EffectiveTo nil), or (nil, nil) if none is.
+	// FindCurrentlyActive returns the task-type-only LaborStandard for
+	// taskType that is active right now (EffectiveTo nil), or (nil, nil)
+	// if none is.
 	FindCurrentlyActive(ctx context.Context, taskType shared.TaskType) (*standard.LaborStandard, error)
+	// FindActiveAsOfForUnit is FindActiveAsOf for the standard declared
+	// for exactly (taskType, unit). unit "" is FindActiveAsOf. It never
+	// falls back to a less specific standard: the "most specific wins"
+	// resolution is the caller's decision (ADR 0035).
+	FindActiveAsOfForUnit(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit, t time.Time) (*standard.LaborStandard, error)
+	// FindCurrentlyActiveForUnit is FindCurrentlyActive for exactly
+	// (taskType, unit). unit "" is FindCurrentlyActive.
+	FindCurrentlyActiveForUnit(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit) (*standard.LaborStandard, error)
 	NextID(ctx context.Context) (shared.StandardId, error)
 }
 

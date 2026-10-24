@@ -31,6 +31,17 @@ type RecordTaskPerformanceRequest struct {
 	TaskType      shared.TaskType
 	ActualSeconds int64
 	CompletedAt   time.Time
+	// HandlingUnit is the handling unit the completed task handled
+	// (EACH, CASE, PALLET), or "" when the TaskCompleted event carried
+	// none. "" scores against the task-type-only standard exactly as
+	// before ADR 0035; a unit scores against the standard declared for
+	// (TaskType, HandlingUnit) when one is active at CompletedAt, falling
+	// back to the task-type-only one.
+	HandlingUnit shared.HandlingUnit
+	// WeightG is the declared weight in grams of the handled case, or nil
+	// when the event carried none. It only matters for a CASE standard
+	// that declares a team lift, and is never guessed or looked up.
+	WeightG *int64
 }
 
 // RecordTaskPerformance is the Kafka-consumer-driven use case: it is
@@ -115,12 +126,12 @@ func (uc *RecordTaskPerformance) Execute(ctx context.Context, req RecordTaskPerf
 // the idle gap, then publish TaskPerformanceRecorded. Every phase runs on
 // the caller's unit of work, so a failure anywhere rolls them all back.
 func (uc *RecordTaskPerformance) record(ctx context.Context, req RecordTaskPerformanceRequest) (*performance.TaskPerformance, error) {
-	standardSecondsAtCompletion, err := uc.standardSecondsAtCompletion(ctx, req)
+	standardSecondsAtCompletion, teamLift, err := uc.standardSecondsAtCompletion(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
-	recorded, err := performance.New(req.KafkaEventId, req.TaskId, req.AssociateId, req.TaskType, req.ActualSeconds, standardSecondsAtCompletion, req.CompletedAt)
+	recorded, err := performance.NewWithHandling(req.KafkaEventId, req.TaskId, req.AssociateId, req.TaskType, req.HandlingUnit, teamLift, req.ActualSeconds, standardSecondsAtCompletion, req.CompletedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +155,7 @@ func (uc *RecordTaskPerformance) record(ctx context.Context, req RecordTaskPerfo
 		return nil, err
 	}
 
-	if err := uc.Events.Publish(ctx, shared.NewTaskPerformanceRecorded(uc.Clock.Now(), recorded.TaskId(), recorded.AssociateId(), recorded.TaskType(), recorded.ActualSeconds(), recorded.EfficiencyPct(), idleSecondsBefore, recorded.CompletedAt())); err != nil {
+	if err := uc.Events.Publish(ctx, shared.NewTaskPerformanceRecorded(uc.Clock.Now(), recorded.TaskId(), recorded.AssociateId(), recorded.TaskType(), recorded.ActualSeconds(), recorded.EfficiencyPct(), idleSecondsBefore, recorded.CompletedAt()).WithHandling(recorded.HandlingUnit(), recorded.TeamLift())); err != nil {
 		return nil, err
 	}
 	return recorded, nil
@@ -155,18 +166,36 @@ func (uc *RecordTaskPerformance) record(ctx context.Context, req RecordTaskPerfo
 // possibly out-of-order or replayed message is scored against the standard
 // that was genuinely in force when the task completed. Zero when the task
 // type carries none — the task is recorded unscorable.
-func (uc *RecordTaskPerformance) standardSecondsAtCompletion(ctx context.Context, req RecordTaskPerformanceRequest) (int64, error) {
-	var standardSeconds int64
-	if req.TaskType != "" {
-		active, err := uc.Standards.FindActiveAsOf(ctx, req.TaskType, req.CompletedAt)
+//
+// Resolution is most-specific-wins (ADR 0035): when the request carries a
+// handling unit, the standard declared for (TaskType, HandlingUnit) is
+// tried first and the task-type-only standard is the fallback; without a
+// handling unit only the task-type-only standard is consulted, which is the
+// behaviour before ADR 0035. teamLift is true when the resolved CASE
+// standard's declared team lift applied to req.WeightG and its standard
+// time is the figure returned.
+func (uc *RecordTaskPerformance) standardSecondsAtCompletion(ctx context.Context, req RecordTaskPerformanceRequest) (seconds int64, teamLift bool, err error) {
+	if req.TaskType == "" {
+		return 0, false, nil
+	}
+	if req.HandlingUnit != "" {
+		specific, err := uc.Standards.FindActiveAsOfForUnit(ctx, req.TaskType, req.HandlingUnit, req.CompletedAt)
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
-		if active != nil {
-			standardSeconds = active.ExpectedSeconds()
+		if specific != nil {
+			seconds, teamLift = specific.SecondsFor(req.WeightG)
+			return seconds, teamLift, nil
 		}
 	}
-	return standardSeconds, nil
+	active, err := uc.Standards.FindActiveAsOf(ctx, req.TaskType, req.CompletedAt)
+	if err != nil {
+		return 0, false, err
+	}
+	if active == nil {
+		return 0, false, nil
+	}
+	return active.ExpectedSeconds(), false, nil
 }
 
 // previousCompletionFor resolves the associate's most recent completion,

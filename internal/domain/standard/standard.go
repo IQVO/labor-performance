@@ -31,6 +31,63 @@ var ErrNegativeTravelComponentSeconds = errors.New("travel component seconds mus
 // run) but can never exceed it.
 var ErrTravelComponentExceedsExpectedSeconds = errors.New("travel component seconds must not exceed expected seconds")
 
+// ErrTeamLiftRequiresCaseUnit is returned when a team-lift declaration is
+// supplied for a standard whose handling unit is not CASE. A team lift is a
+// property of a heavy sealed case; an EACH has no such threshold and a
+// PALLET is moved with equipment, not lifted by two operators (ADR 0035).
+var ErrTeamLiftRequiresCaseUnit = errors.New("a team lift can only be declared on a CASE handling-unit standard")
+
+// ErrNonPositiveTeamLiftThreshold is returned when the team-lift weight
+// threshold is zero or negative: "heavier than 0 g" is every case, not a
+// threshold.
+var ErrNonPositiveTeamLiftThreshold = errors.New("team lift threshold grams must be greater than zero")
+
+// ErrNonPositiveTeamLiftExpectedSeconds is returned when the team-lift
+// standard itself is zero or negative, for the same reason as
+// ErrNonPositiveExpectedSeconds.
+var ErrNonPositiveTeamLiftExpectedSeconds = errors.New("team lift expected seconds must be greater than zero")
+
+// TeamLiftOperators is the number of operators a team lift needs. It is a
+// constant, not a declared parameter: the business fact declared per
+// standard is the weight threshold and the standard time, and two is what
+// "team lift" means (ADR 0035).
+const TeamLiftOperators = 2
+
+// TeamLift is the declared heavy-case rule of a CASE standard: a case
+// heavier than ThresholdG grams needs TeamLiftOperators operators, and its
+// engineered elapsed time is ExpectedSeconds instead of the standard's own.
+// It is declarative input: this context never learns a case weight from a
+// sibling over REST or MCP (AGENTS.md non-negotiable 1).
+type TeamLift struct {
+	thresholdG      int64
+	expectedSeconds int64
+}
+
+// NewTeamLift validates and constructs a TeamLift declaration.
+func NewTeamLift(thresholdG, expectedSeconds int64) (TeamLift, error) {
+	if thresholdG <= 0 {
+		return TeamLift{}, ErrNonPositiveTeamLiftThreshold
+	}
+	if expectedSeconds <= 0 {
+		return TeamLift{}, ErrNonPositiveTeamLiftExpectedSeconds
+	}
+	return TeamLift{thresholdG: thresholdG, expectedSeconds: expectedSeconds}, nil
+}
+
+// ThresholdG is the weight in grams ABOVE which a case needs a team lift.
+func (t TeamLift) ThresholdG() int64 { return t.thresholdG }
+
+// ExpectedSeconds is the engineered elapsed time of a team lift.
+func (t TeamLift) ExpectedSeconds() int64 { return t.expectedSeconds }
+
+// Operators is the number of operators a team lift needs.
+func (t TeamLift) Operators() int { return TeamLiftOperators }
+
+// Applies reports whether a case of weightG grams needs a team lift. The
+// threshold is exclusive: a case weighing EXACTLY the threshold is still a
+// one-operator lift; only strictly heavier cases are team lifts.
+func (t TeamLift) Applies(weightG int64) bool { return weightG > t.thresholdG }
+
 // LaborStandard is the aggregate root for "how long a task TYPE should
 // take". EffectiveTo is nil while the standard is the currently active one
 // for its TaskType; Close sets it once a revision supersedes this record.
@@ -46,9 +103,19 @@ var ErrTravelComponentExceedsExpectedSeconds = errors.New("travel component seco
 // non-negotiables and the domain-model rule's "v1 scope decisions still
 // in force") — it never resolves or validates this value against a live
 // distance lookup itself. See ADR 0015.
+//
+// HandlingUnit is OPTIONAL: "" (the default, and the only state that
+// existed before ADR 0035) means the standard is about the task type alone;
+// EACH, CASE or PALLET makes it the more specific standard for that
+// handling unit, which wins over the task-type-only one when a completed
+// task carries a handling unit. At most one standard is open per
+// (TaskType, HandlingUnit). TeamLift is the optional heavy-case rule and is
+// only valid on a CASE standard.
 type LaborStandard struct {
 	id                     shared.StandardId
 	taskType               shared.TaskType
+	handlingUnit           shared.HandlingUnit
+	teamLift               *TeamLift
 	expectedSeconds        int64
 	travelComponentSeconds *int64
 	effectiveFrom          time.Time
@@ -67,15 +134,28 @@ type LaborStandard struct {
 // ErrNegativeTravelComponentSeconds or
 // ErrTravelComponentExceedsExpectedSeconds otherwise.
 func New(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time) (*LaborStandard, error) {
+	return NewForUnit(id, taskType, "", expectedSeconds, travelComponentSeconds, nil, effectiveFrom)
+}
+
+// NewForUnit constructs a LaborStandard for a (TaskType, HandlingUnit)
+// pair. handlingUnit "" is the task-type-only standard (identical to New).
+// teamLift is optional and only valid when handlingUnit is CASE
+// (ErrTeamLiftRequiresCaseUnit otherwise). Every New invariant applies.
+func NewForUnit(id shared.StandardId, taskType shared.TaskType, handlingUnit shared.HandlingUnit, expectedSeconds int64, travelComponentSeconds *int64, teamLift *TeamLift, effectiveFrom time.Time) (*LaborStandard, error) {
 	if expectedSeconds <= 0 {
 		return nil, ErrNonPositiveExpectedSeconds
 	}
 	if err := validateTravelComponentSeconds(travelComponentSeconds, expectedSeconds); err != nil {
 		return nil, err
 	}
+	if teamLift != nil && handlingUnit != shared.Case {
+		return nil, ErrTeamLiftRequiresCaseUnit
+	}
 	return &LaborStandard{
 		id:                     id,
 		taskType:               taskType,
+		handlingUnit:           handlingUnit,
+		teamLift:               teamLift,
 		expectedSeconds:        expectedSeconds,
 		travelComponentSeconds: travelComponentSeconds,
 		effectiveFrom:          effectiveFrom,
@@ -88,12 +168,21 @@ func New(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, 
 // version is the row's optimistic-concurrency token as read; 0 is treated
 // as 1 for callers predating the column (the in-memory adapter).
 func Rehydrate(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time, effectiveTo *time.Time, version int) *LaborStandard {
+	return RehydrateForUnit(id, taskType, "", expectedSeconds, travelComponentSeconds, nil, effectiveFrom, effectiveTo, version)
+}
+
+// RehydrateForUnit is Rehydrate for a handling-unit standard: the same
+// silent reconstruction, carrying the handling unit and the optional team
+// lift as persisted.
+func RehydrateForUnit(id shared.StandardId, taskType shared.TaskType, handlingUnit shared.HandlingUnit, expectedSeconds int64, travelComponentSeconds *int64, teamLift *TeamLift, effectiveFrom time.Time, effectiveTo *time.Time, version int) *LaborStandard {
 	if version <= 0 {
 		version = 1
 	}
 	return &LaborStandard{
 		id:                     id,
 		taskType:               taskType,
+		handlingUnit:           handlingUnit,
+		teamLift:               teamLift,
 		expectedSeconds:        expectedSeconds,
 		travelComponentSeconds: travelComponentSeconds,
 		effectiveFrom:          effectiveFrom,
@@ -126,6 +215,27 @@ func (s *LaborStandard) IsActiveAt(t time.Time) bool {
 func (s *LaborStandard) ID() shared.StandardId     { return s.id }
 func (s *LaborStandard) TaskType() shared.TaskType { return s.taskType }
 func (s *LaborStandard) ExpectedSeconds() int64    { return s.expectedSeconds }
+
+// HandlingUnit is the handling unit this standard is specific to, or ""
+// when it is about the task type alone.
+func (s *LaborStandard) HandlingUnit() shared.HandlingUnit { return s.handlingUnit }
+
+// TeamLift is the optional heavy-case rule (CASE standards only), nil when
+// none was declared.
+func (s *LaborStandard) TeamLift() *TeamLift { return s.teamLift }
+
+// SecondsFor returns the engineered expected seconds to score a completion
+// against and whether the team-lift standard was the one used. weightG is
+// the declared weight in grams of the handled case; nil means "unknown" and
+// never triggers a team lift (a weight is never guessed). Without a
+// declared team lift, or when weightG does not exceed its threshold, the
+// answer is the standard's own ExpectedSeconds.
+func (s *LaborStandard) SecondsFor(weightG *int64) (seconds int64, teamLift bool) {
+	if s.teamLift != nil && weightG != nil && s.teamLift.Applies(*weightG) {
+		return s.teamLift.ExpectedSeconds(), true
+	}
+	return s.expectedSeconds, false
+}
 
 // TravelComponentSeconds is the optional travel-time breakdown of
 // ExpectedSeconds — nil when not declared for this standard.
