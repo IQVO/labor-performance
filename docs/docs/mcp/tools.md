@@ -29,7 +29,7 @@ from this branch. They match `testdata/tool_registry.golden`.
 | --- | --- | --- | --- | --- |
 | `get_associate_scorecard` | `associateId` (string, **required**): the associate whose scorecard to return. An empty string returns the tool error `associateId is required`. | `readOnlyHint: true`, `idempotentHint: false` | `GetAssociateScorecard` | `{associateId, taskCount, meanEfficiencyPct, byTaskType: {<TYPE>: {taskCount, meanEfficiencyPct}}, trend, coachingFlag}` |
 | `get_task_type_performance` | `taskType` (string, **required**): `PICK`, `PACK` or `SLAM` | `readOnlyHint: true`, `idempotentHint: false` | `GetTaskTypePerformance` | `{taskType, taskCount, meanEfficiencyPct, meanActualSeconds}` |
-| `get_labor_standard` | `taskType` (string, **required**): `PICK`, `PACK` or `SLAM` | `readOnlyHint: true`, `idempotentHint: false` | `GetStandard` | `{taskType, expectedSeconds, travelComponentSeconds?, effectiveFrom, effectiveTo?}` |
+| `get_labor_standard` | `taskType` (string, **required**): `PICK`, `PACK` or `SLAM` | `readOnlyHint: true`, `idempotentHint: false` | `GetStandard` | `{taskType, expectedSeconds, travelComponentSeconds?, effectiveFrom, effectiveTo?}`. Always the task-type-only standard: handling-unit standards ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)) are read over REST (`GET /standards/{taskType}?handlingUnit=`). |
 | `get_task_type_utilization` | `taskType` (string, **required**); `windowSeconds` (integer, optional; omitted or ≤ 0 means 3600) | `readOnlyHint: true`, `idempotentHint: false` | `GetUtilization.ForTaskType` | `{taskType, associates, windowSeconds, taskSeconds, idleSeconds, openGapSeconds, utilizationPct}` |
 
 Every input schema has `additionalProperties: false`, so unknown

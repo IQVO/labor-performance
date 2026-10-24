@@ -126,8 +126,8 @@ Tables created by the migrations:
 
 | Database | Table | Purpose |
 | --- | --- | --- |
-| OLTP | `labor_standards` | Append-only standard history. `travel_component_seconds` was added in 0004. `version` and a unique partial index allowing one open standard per `task_type` came in 0006 ([ADR 0022](../adr/0022-optimistic-concurrency-one-open-standard.md)). |
-| OLTP | `task_performances` | One scored completion per CloudEvents `id` (`event_id` primary key). |
+| OLTP | `labor_standards` | Append-only standard history. `travel_component_seconds` was added in 0004. `version` and a unique partial index allowing one open standard per `task_type` came in 0006 ([ADR 0022](../adr/0022-optimistic-concurrency-one-open-standard.md)). 0007 added `handling_unit`, `team_lift_threshold_g` and `team_lift_expected_seconds` and widened that index to `(task_type, handling_unit)` ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)). |
+| OLTP | `task_performances` | One scored completion per CloudEvents `id` (`event_id` primary key). `handling_unit` and `team_lift` came in 0007. |
 | OLTP | `processed_events` | Consumer idempotency set: CloudEvents ids already applied. |
 | OLTP | `idle_periods` | Derived between-task idle gaps (`capped` flag, [ADR 0014](../adr/0014-labor-utilization-idleness.md)). |
 | OLTP | `outbox_events` | Transactional outbox rows (`published_at`, `attempts`, `last_error`). |
