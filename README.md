@@ -1,5 +1,7 @@
 # Labor Performance
 
+[![CI](https://github.com/IQVO/labor-performance/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/IQVO/labor-performance/actions/workflows/ci.yml?query=branch%3Adevelop) [![coverage gate](https://img.shields.io/badge/coverage%20gate-90%25-brightgreen)](https://github.com/IQVO/labor-performance/blob/develop/Makefile) [![Go](https://img.shields.io/badge/go-1.26.10-00ADD8?logo=go&logoColor=white)](https://github.com/IQVO/labor-performance/blob/develop/go.mod) [![release](https://img.shields.io/github/v/release/IQVO/labor-performance?sort=semver)](https://github.com/IQVO/labor-performance/releases) [![docs](https://img.shields.io/badge/docs-iqvo.github.io-blue)](https://iqvo.github.io/labor-performance/) [![license](https://img.shields.io/badge/license-MIT-blue)](https://github.com/IQVO/labor-performance/blob/develop/LICENSE)
+
 Engineered labor standards ("a PICK should take 45s") and
 actual-vs-standard performance scoring ("this associate's last PICK took
 52s — 87% of standard") for the `warehouse-systems` fleet — the eighth
