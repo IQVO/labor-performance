@@ -175,6 +175,13 @@ Fully qualified name of the MCP server deployment/service (ADR-0009).
 {{- end }}
 
 {{/*
+Fully qualified name of the A2A agent Deployment/Service (<release>-a2a, ADR 0036).
+*/}}
+{{- define "labor-performance.a2aFullname" -}}
+{{- include "labor-performance.fullname" . }}-a2a
+{{- end }}
+
+{{/*
 Fully qualified name of the frontend Module Federation remote deployment/service.
 
 The remote is served by its own nginx pod and reached through warehouse-infra's

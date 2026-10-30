@@ -1,0 +1,235 @@
+// Command a2a is the composition root for the Labor Performance A2A
+// (Agent2Agent) agent: it wires env config to the Postgres read repos, the
+// repos to the read use cases, and those to the inbound A2A adapter
+// (internal/adapters/inbound/a2a), then serves JSON-RPC over HTTP with the
+// Agent Card at /.well-known/agent-card.json. It is the third deployable
+// beside cmd/labor (HTTP + Kafka consumer) and cmd/mcp, over the SAME read
+// use cases.
+//
+// labor-performance exposes no write use case over MCP (DefineStandard is
+// driven by an operator over chi HTTP, RecordTaskPerformance by
+// fulfillment-execution's TaskCompleted event over Kafka), so this agent is
+// READ-ONLY too: it wires the four read use cases and nothing that changes
+// state. Consequently there is no Kafka producer, outbox publisher or relay
+// here, and -- like the rest of this context -- no outbound client of any
+// kind: A2A is inbound only.
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	inbounda2a "github.com/claudioed/labor-performance/internal/adapters/inbound/a2a"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/bootretry"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/postgres"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/system"
+	"github.com/claudioed/labor-performance/internal/adapters/outbound/telemetry"
+	"github.com/claudioed/labor-performance/internal/application/ports"
+	"github.com/claudioed/labor-performance/internal/application/usecases"
+)
+
+func main() {
+	if err := run(); err != nil {
+		slog.Error("a2a server exited with error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	serviceName := getenv("OTEL_SERVICE_NAME", "labor-performance-a2a")
+
+	logger := slog.New(telemetry.NewTraceHandler(
+		newJSONHandler(getenv("LOG_LEVEL", "info")),
+	))
+	slog.SetDefault(logger)
+
+	// Fail fast, before telemetry, any connection and the listener: a
+	// missing DATABASE_URL or A2A_AGENT_URL is a boot error that names it.
+	cfg, err := loadBootConfig()
+	if err != nil {
+		return err
+	}
+	databaseURL := cfg.databaseURL
+
+	// Same non-blocking telemetry setup as the HTTP service: an unreachable
+	// Collector degrades to dropped telemetry, never a server that won't start.
+	shutdownTelemetry, err := telemetry.Setup(
+		context.Background(),
+		serviceName,
+		getenv("SERVICE_VERSION", "dev"),
+		getenv("OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.DefaultOTLPEndpoint),
+	)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			logger.Warn("telemetry shutdown reported an error", "error", err)
+		}
+	}()
+
+	httpAddr := getenv("A2A_ADDR", ":8093")
+	// See cmd/labor/main.go's identical fallback and buildAdapters' doc
+	// comment for the full "why" (session-scoped pg_advisory_lock vs
+	// PgBouncer transaction-pooling incompatibility, ADR
+	// 0020-migrations-direct-postgres-connection.md, porting
+	// order-management's ADR-0029). This binary also runs migrations on
+	// start (buildAdapters below), so it needs the same direct-connection
+	// split.
+	migrationsDatabaseURL := getenv("MIGRATIONS_DATABASE_URL", databaseURL)
+	migrationsPath := getenv("MIGRATIONS_PATH", "migrations")
+
+	adapters, closeAdapters, err := buildAdapters(context.Background(), databaseURL, migrationsDatabaseURL, migrationsPath, logger)
+	if err != nil {
+		return err
+	}
+	defer closeAdapters()
+
+	// The A2A adapter reuses the SAME read use cases the HTTP and MCP
+	// adapters use, each over the same repos. No write use case is wired --
+	// see this file's own package doc comment.
+	deps := inbounda2a.Deps{
+		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: adapters.performances},
+		GetTaskTypePerformance: &usecases.GetTaskTypePerformance{Performances: adapters.performances},
+		GetStandard:            &usecases.GetStandard{Standards: adapters.standards},
+		GetUtilization:         &usecases.GetUtilization{Performances: adapters.performances, IdlePeriods: adapters.idlePeriods, Clock: system.Clock{}},
+	}
+	card := inbounda2a.Card(inbounda2a.Config{AgentURL: cfg.agentURL, Version: getenv("SERVICE_VERSION", "dev")})
+	handler := newRouter(inbounda2a.Handler(inbounda2a.NewExecutor(deps)), card, serviceName)
+
+	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+
+	go func() {
+		logger.Info("a2a server listening (JSON-RPC)", "addr", httpAddr, "agentUrl", cfg.agentURL)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("a2a server failed", "error", err)
+		}
+	}()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	<-ctx.Done()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return srv.Shutdown(shutdownCtx)
+}
+
+// adapterSet is the read-side outbound repos the A2A agent needs: the
+// Postgres repos, over the same database as cmd/labor so both binaries read
+// the same store.
+type adapterSet struct {
+	standards    ports.StandardRepo
+	performances ports.PerformanceRepo
+	idlePeriods  ports.IdlePeriodRepo
+}
+
+// errNoDatabase is the boot error of a missing DATABASE_URL: the A2A agent
+// reads the same Postgres as cmd/labor and has no in-memory fallback
+// (ADR 0034).
+var errNoDatabase = errors.New("DATABASE_URL is required: this context runs on real Postgres")
+
+// bootConfig is the mandatory configuration of this binary.
+type bootConfig struct {
+	databaseURL string
+	// agentURL is the absolute URL advertised on the Agent Card.
+	agentURL string
+}
+
+// loadBootConfig reads and validates the mandatory environment before
+// anything is dialled or bound. Every error names its variable; boot error
+// strings keep the "<VAR> is required" shape the chart tests scan for.
+func loadBootConfig() (bootConfig, error) {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		return bootConfig{}, errNoDatabase
+	}
+	agentURL := strings.TrimSpace(os.Getenv("A2A_AGENT_URL"))
+	if agentURL == "" {
+		return bootConfig{}, errors.New("A2A_AGENT_URL is required: the Agent Card must advertise the absolute URL clients dial (e.g. http://<release>-a2a.<ns>.svc.cluster.local:8093/)")
+	}
+	if u, err := url.Parse(agentURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return bootConfig{}, fmt.Errorf("A2A_AGENT_URL=%q is not an absolute http(s) URL", agentURL)
+	}
+	return bootConfig{databaseURL: databaseURL, agentURL: agentURL}, nil
+}
+
+// buildAdapters wires the Postgres repos over DATABASE_URL, as
+// cmd/labor/main.go's buildPersistence does (minus the ProcessedEvents repo,
+// which only the Kafka-consuming OLTP binary needs). An empty databaseURL is
+// a boot error naming the variable; there is no in-memory fallback.
+//
+// migrationsDatabaseURL is used ONLY for the golang-migrate step below,
+// mirroring cmd/labor/main.go's buildPersistence exactly — see its doc
+// comment for the full "why" a direct, non-pooled connection is needed
+// here even though the pgxpool opened just after (databaseURL) stays on
+// PgBouncer.
+func buildAdapters(ctx context.Context, databaseURL, migrationsDatabaseURL, migrationsPath string, logger *slog.Logger) (adapterSet, func(), error) {
+	noop := func() {}
+
+	if databaseURL == "" {
+		return adapterSet{}, noop, errNoDatabase
+	}
+
+	if err := bootretry.Retry(ctx, logger, "run migrations", func() error {
+		return postgres.RunMigrations(migrationsDatabaseURL, migrationsPath)
+	}); err != nil {
+		return adapterSet{}, noop, err
+	}
+
+	pool, err := postgres.NewPool(ctx, databaseURL)
+	if err != nil {
+		return adapterSet{}, noop, err
+	}
+	// ParseConfig/NewWithConfig do not themselves establish a
+	// connection, so without this the first-dial reset would surface
+	// inside the first served request instead of at boot.
+	if err := bootretry.Retry(ctx, logger, "ping database", func() error {
+		return pool.Ping(ctx)
+	}); err != nil {
+		pool.Close()
+		return adapterSet{}, noop, err
+	}
+
+	return adapterSet{
+		standards:    postgres.NewStandardRepo(pool),
+		performances: postgres.NewPerformanceRepo(pool),
+		idlePeriods:  postgres.NewIdlePeriodRepo(pool),
+	}, pool.Close, nil
+}
+
+// newJSONHandler mirrors cmd/labor/main.go's newLogger level parsing
+// (case-insensitive, "warning" is an alias of "warn"), kept local to this
+// binary so both composition roots stay free-standing.
+func newJSONHandler(level string) slog.Handler {
+	var lvl slog.Level
+	switch strings.ToLower(level) {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn", "warning":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+	return slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl})
+}
+
+func getenv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}

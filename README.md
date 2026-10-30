@@ -31,6 +31,7 @@ Published at https://iqvo.github.io/labor-performance/ (sources under
 | Domain | [Domain vision](docs/docs/business-context/domain-vision.md) · [Subdomain classification](docs/docs/ddd/subdomain-classification.md) · [Use cases](docs/docs/ddd/use-cases.md) · [DDD artifacts](docs/docs/ddd/ddd-artifacts.md) |
 | Ecosystem | [Integration](docs/docs/ecosystem/integration.md) · [Context map](docs/docs/ecosystem/context-map.md) |
 | MCP | [MCP tools](docs/docs/mcp/tools.md) · [Governance charter](docs/docs/mcp/governance-charter.md) |
+| A2A | [ADR 0036 — A2A inbound adapter](docs/docs/adr/0036-a2a-inbound-adapter.md) |
 | Decisions | [ADR index](docs/docs/adr/about.md) (31 records) |
 | APIs | [`apis/openapi.yaml`](apis/openapi.yaml) · [`apis/openapi-reports.yaml`](apis/openapi-reports.yaml) · [`apis/asyncapi.yaml`](apis/asyncapi.yaml) |
 
@@ -95,6 +96,8 @@ cmd/labor-reports/                main.go — analytics READER (read-only pool);
                                    serves GET /reports/performance[/freshness]
 cmd/mcp/                          main.go — MCP server (Streamable HTTP, read-only
                                    tools; ADR 0009)
+cmd/a2a/                          main.go, router.go — A2A agent (JSON-RPC, read-only
+                                   skills, Agent Card; ADR 0036)
 internal/
   domain/
     standard/                     LaborStandard aggregate: TaskType -> expected duration
@@ -123,6 +126,7 @@ internal/
                                    analytics_consumer.go — warehouse.labor-performance
                                                        .analytics (projector)
     inbound/mcp/                  MCP tools, resource template, prompt (cmd/mcp)
+    inbound/a2a/                  A2A skills + Agent Card (cmd/a2a); read-only
     kafka/                        cloudevents (CloudEvents 1.0 New/Decode, topics,
                                    full type constants — ADR 0021), otelkafka
     outbound/postgres/            pgxpool repos + golang-migrate runner (OLTP DB);
@@ -155,7 +159,9 @@ analytical database) and `cmd/labor-reports` (read-only). They share no
 database connection: report query load can never contend with the
 transactional path that ingests `TaskCompleted`. `cmd/mcp`
 ([ADR 0009](docs/docs/adr/0009-mcp-inbound-adapter.md)) is a fourth,
-read-only deployable over the OLTP database.
+read-only deployable over the OLTP database, and `cmd/a2a`
+([ADR 0036](docs/docs/adr/0036-a2a-inbound-adapter.md)) a fifth, equally
+read-only, over the same read use cases.
 
 The domain layer is pure Go: no `chi`, no `pgx`, no `kafka-go`. No JSON
 struct tags in the domain packages.
@@ -309,7 +315,7 @@ curl -s localhost:8080/associates/assoc-1/scorecard
 
 The other binaries read the same `LOG_LEVEL`/`OTEL_EXPORTER_OTLP_ENDPOINT`/`SERVICE_VERSION` set
 (their `OTEL_SERVICE_NAME` defaults are `labor-performance-projector`,
-`labor-performance-reports` and `labor-performance-mcp`), plus:
+`labor-performance-reports`, `labor-performance-mcp` and `labor-performance-a2a`), plus:
 
 | Binary | Variable | Default | Purpose |
 | --- | --- | --- | --- |
@@ -321,6 +327,9 @@ The other binaries read the same `LOG_LEVEL`/`OTEL_EXPORTER_OTLP_ENDPOINT`/`SERV
 | `cmd/labor-reports` | `HTTP_ADDR` | `:8092` | Reports API listener. |
 | `cmd/mcp` | `MCP_ADDR` | `:8090` | Streamable HTTP listener. |
 | `cmd/mcp` | `DATABASE_URL` / `MIGRATIONS_DATABASE_URL` / `MIGRATIONS_PATH` | *(required)* / *(falls back to `DATABASE_URL`)* / `migrations` | Same OLTP store as `cmd/labor`; `DATABASE_URL` unset exits at boot. |
+| `cmd/a2a` | `A2A_ADDR` | `:8093` | JSON-RPC listener (`/` and `/a2a`; card at `/.well-known/agent-card.json`; `/healthz`). |
+| `cmd/a2a` | `A2A_AGENT_URL` | *(required)* | Absolute http(s) URL advertised on the Agent Card; unset or relative exits at boot. |
+| `cmd/a2a` | `DATABASE_URL` / `MIGRATIONS_DATABASE_URL` / `MIGRATIONS_PATH` | *(required)* / *(falls back to `DATABASE_URL`)* / `migrations` | Same OLTP store as `cmd/labor`; `DATABASE_URL` unset exits at boot. |
 
 None of the binaries exposes a Prometheus `/metrics` endpoint: metrics are
 pushed over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (ADR 0008).
@@ -351,6 +360,27 @@ The MCP server (`cmd/mcp`) exposes four read-only tools —
 `get_labor_standard`, `get_task_type_utilization` — plus the
 `scorecard://labor/{associateId}` resource template and the
 `review_associate_performance` prompt. No write tool is registered.
+
+### A2A agent (`cmd/a2a`)
+
+`cmd/a2a` ([ADR 0036](docs/docs/adr/0036-a2a-inbound-adapter.md)) is this
+context as an Agent2Agent agent: JSON-RPC 2.0 at `/` and `/a2a` on port
+`8093`, Agent Card at `/.well-known/agent-card.json`. It is **read-only** (the
+MCP charter offers no write, so neither does A2A) and adds no outbound client.
+Two curated, goal-shaped skills over the same read use cases; the request is a
+data part (or a text part holding the same JSON) `{"skill": "<id>",
+"arguments": {...}}`, with strict arguments (unknown names are rejected):
+
+| Skill | Arguments | Answers |
+| --- | --- | --- |
+| `associate_scorecard` | `associateId` | task count, mean efficiency, per-task-type breakdown, trend, coaching flag |
+| `task_type_status` | `taskType` (PICK/PACK/SLAM), optional `windowSeconds` | fleet-wide performance, the active standard (`null` if none) and utilization over the window |
+
+Domain rejections are answered in-band as RFC 7807-style `problem`s in the
+message envelope (404 unknown associate, 400 bad task type or argument, 500
+otherwise), never as JSON-RPC errors. The endpoint is unauthenticated like the
+other surfaces. The Helm chart ships it as `a2a.*` (default off), exposed by
+Kong at `/api/a2a/labor-performance`.
 
 None of these surfaces is authenticated: the bearer-key layer from
 [ADR 0011](docs/docs/adr/0011-rest-auth-static-bearer-scopes.md) was removed by
@@ -606,6 +636,8 @@ and have since been added, bringing this service to full fleet parity with
   ([ADR 0007](docs/docs/adr/0007-analytical-data-product.md)).
 - **MCP inbound adapter** — `cmd/mcp`
   ([ADR 0009](docs/docs/adr/0009-mcp-inbound-adapter.md)).
+- **A2A inbound adapter** — `cmd/a2a`, read-only
+  ([ADR 0036](docs/docs/adr/0036-a2a-inbound-adapter.md)).
 - **Integration event** — `TaskPerformanceRecorded` on
   `warehouse.labor-performance.events`, consumed by
   `workforce-management`
@@ -645,6 +677,7 @@ and have since been added, bringing this service to full fleet parity with
 30. [0030 — MCP eval suite and governance gate, run as plain go test](docs/docs/adr/0030-mcp-eval-and-governance-gates.md)
 31. [0031 — Analytics consumer: atomic claim + apply, commit after success, retry transient failures](docs/docs/adr/0031-analytics-consumer-atomic-claim-and-retry.md)
 33. [0033 — MCP tool invocation and denial counters](docs/docs/adr/0033-mcp-invocation-and-denial-counters.md)
+36. [0036 — A2A inbound adapter (read-only)](docs/docs/adr/0036-a2a-inbound-adapter.md)
 
 The same list, with statuses, is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
 
