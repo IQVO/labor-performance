@@ -1,13 +1,5 @@
 # Labor Performance
 
-> **⚠️ Study project.** This repository is an educational exercise in
-> Domain-Driven Design applied to warehouse management/execution systems. It
-> follows real industry-standard patterns and terminology (WMS/WES/WCS,
-> CloudEvents 1.0 envelopes, RFC 7807, hexagonal architecture) but is
-> **not a production system** and is **not affiliated with, endorsed by, or
-> representative of any real-world
-> company**.
-
 Engineered labor standards ("a PICK should take 45s") and
 actual-vs-standard performance scoring ("this associate's last PICK took
 52s — 87% of standard") for the `warehouse-systems` fleet — the eighth
@@ -18,6 +10,13 @@ bounded-context Go service in this fleet, after `order-management`,
 📚 **Full documentation site:** https://iqvo.github.io/labor-performance/
 (includes the ddd-crew DDD artifact pack — canvases, context map,
 EventStorming, class/ER/sequence diagrams — under *DDD artifacts*).
+
+## Disclaimer
+
+This project is a domain-driven design study. It is not associated with,
+endorsed by or affiliated with any company, and it uses no company's code,
+data, logos or trademarks. All names, figures and examples are illustrative
+or synthetic.
 
 ## Documentation
 
@@ -464,6 +463,32 @@ curl -s localhost:8080/task-types/PICK/performance
 been defined for this TaskType. See
 [ADR 0006](docs/docs/adr/0006-mean-actual-seconds-independent-of-standard.md).
 
+## Analytics data product
+
+An additive analytical read side built from this context's own domain events:
+the OLTP binary fans events out through the transactional outbox to BOTH
+`warehouse.labor-performance.events` and `warehouse.labor-performance.analytics`;
+`cmd/labor-projector` (the only writer of the analytical database) consumes the
+analytics topic and projects into it; `cmd/labor-reports` serves the report
+read-only over REST (`/reports/performance`), pointed at `ANALYTICS_DATABASE_URL`
+with a read-only role.
+
+## MCP server
+
+`cmd/mcp` is the read-only MCP inbound surface (Streamable HTTP on `:8090`,
+`GET /healthz` backs the probes; no authentication — the in-cluster ClusterIP
+boundary is the access control). Tools: `get_associate_scorecard`,
+`get_labor_standard`, `get_task_type_performance`, `get_task_type_utilization`
+and the curated report tool `review_associate_performance`.
+
+## Observability
+
+Traces and metrics are exported over OTLP/gRPC to the Collector named by
+`OTEL_EXPORTER_OTLP_ENDPOINT` (never required — with nothing listening the
+service still works). One server span per HTTP request (otelchi, span name =
+the route pattern) plus the OTel HTTP server and Go runtime metrics. The
+business metric `labor_performance.standards.defined` counts labor standards
+defined. Logs are structured `log/slog` JSON on stdout.
 ## Quality gate
 
 Every `make` target mirrors a step in `.github/workflows/ci.yml`, so the
