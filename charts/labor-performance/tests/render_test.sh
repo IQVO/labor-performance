@@ -61,7 +61,7 @@ no_sweep="$(render --set config.housekeepingInterval=0s --show-only templates/de
 grep -A1 'name: HOUSEKEEPING_INTERVAL' <<<"$no_sweep" | grep -q 'value: "0s"' \
   || fail "config.housekeepingInterval=0s is not rendered"
 
-analytics_args=(--set analytics.enabled=true --set mcp.enabled=true --set analytics.database.projectorUrl=postgres://projector@example.invalid:5432/a)
+analytics_args=(--set analytics.enabled=true --set mcp.enabled=true --set a2a.enabled=true --set analytics.database.projectorUrl=postgres://projector@example.invalid:5432/a)
 
 # D24: cmd/mcp serves GET /healthz, so all three MCP probes are httpGet
 # /healthz on the http port (they used to be tcpSocket).
@@ -76,7 +76,7 @@ fi
 
 # The other workloads read their own explicit env and must NOT inherit the
 # api's HTTP_ADDR / OTEL_SERVICE_NAME from the ConfigMap.
-for template in reports-deployment.yaml projector-deployment.yaml mcp-deployment.yaml; do
+for template in reports-deployment.yaml projector-deployment.yaml mcp-deployment.yaml a2a-deployment.yaml; do
   if render "${analytics_args[@]}" --show-only "templates/$template" | grep -q 'configMapRef:'; then
     fail "$template must not mount the api ConfigMap"
   fi
@@ -118,6 +118,21 @@ grace="$(awk '/terminationGracePeriodSeconds:/ {print $2; exit}' <<<"$api_deploy
 # --- the mandatory env of every binary is rendered -----------------------------------
 mcp_dep="$(render --set mcp.enabled=true --show-only templates/mcp-deployment.yaml)"
 grep -A4 'name: DATABASE_URL$' <<<"$mcp_dep" | grep -q 'secretKeyRef:' || fail "the mcp DATABASE_URL must come from a Secret"
+a2a_dep="$(render --set a2a.enabled=true --show-only templates/a2a-deployment.yaml)"
+grep -A4 'name: DATABASE_URL$' <<<"$a2a_dep" | grep -q 'secretKeyRef:' || fail "the a2a DATABASE_URL must come from a Secret"
+[[ "$(env_value "$a2a_dep" A2A_ADDR)" == ":8093" ]] || fail "the a2a agent must listen on :8093 (8090 is mcp, 8091 the projector admin, 8092 the reports API)"
+grep -q 'command: \["/app/a2a"\]' <<<"$a2a_dep" || fail "the a2a Deployment must run /app/a2a"
+# The Agent Card must advertise a dialable absolute URL: it defaults to the
+# release's in-cluster Service DNS (namespace-derived, so pattern-match) and
+# stays overridable.
+a2a_url="$(env_value "$a2a_dep" A2A_AGENT_URL || true)" # a missing var must reach the fail message below, not abort under set -e
+[[ "$a2a_url" =~ ^http://[a-z0-9.-]+-a2a\.[a-z0-9-]+\.svc\.cluster\.local:8093/$ ]] || fail "A2A_AGENT_URL default is not the in-cluster Service DNS: $a2a_url"
+a2a_override="$(render --set a2a.enabled=true --set a2a.agentUrl=http://gw.example/api/a2a/labor-performance/ --show-only templates/a2a-deployment.yaml)"
+[[ "$(env_value "$a2a_override" A2A_AGENT_URL || true)" == "http://gw.example/api/a2a/labor-performance/" ]] || fail "a2a.agentUrl does not override A2A_AGENT_URL"
+# The agent is read-only like the MCP server: it must not grow Kafka/publisher env.
+if grep -qE 'name: (KAFKA_BROKERS|EVENT_PUBLISHER|KAFKA_CONSUMER_GROUP)$' <<<"$a2a_dep"; then fail "the read-only a2a Deployment must not carry Kafka/publisher env"; fi
+# A2A is off by default: no a2a resource renders unless asked for.
+if render --show-only templates/a2a-deployment.yaml 2>/dev/null | grep -q 'kind: Deployment'; then fail "the a2a Deployment rendered with default values"; fi
 proj="$(render "${analytics_args[@]}" --show-only templates/projector-deployment.yaml)"
 reports="$(render "${analytics_args[@]}" --show-only templates/reports-deployment.yaml)"
 [[ "$(env_value "$proj" KAFKA_BROKERS)" == "kafka.example.invalid:9092" ]] || fail "the projector KAFKA_BROKERS is not rendered from kafka.brokers"
@@ -130,6 +145,14 @@ for var in DATABASE_URL KAFKA_BROKERS KAFKA_CONSUMER_GROUP EVENT_PUBLISHER; do
   grep -q "name: $var\$" <<<"$api_deployment" || fail "the api Deployment does not render $var"
 done
 grep -q 'name: DATABASE_URL$' <<<"$mcp_dep" || fail "the mcp Deployment does not render DATABASE_URL"
+# Every variable cmd/a2a's boot config names as REQUIRED is rendered, derived
+# from the Go source (non-test files) so a new mandatory variable fails until
+# the chart has it. The pattern allows digits: [A-Z][A-Z0-9_]+ keeps A2A_AGENT_URL whole.
+a2a_vars="$(grep -rho --include='*.go' --exclude='*_test.go' '[A-Z][A-Z0-9_]\{2,\} is required' "$repo_dir"/cmd/a2a | sed -E 's/ is required//' | sort -u || true)"
+[[ -n "$a2a_vars" ]] || fail "found no mandatory variables for cmd/a2a; the scan is looking in the wrong place"
+for var in $a2a_vars; do
+  grep -q "name: $var\$" <<<"$a2a_dep" || fail "the a2a Deployment does not render $var, which cmd/a2a requires"
+done
 grep -q 'name: ANALYTICS_DATABASE_URL$' <<<"$proj" || fail "the projector Deployment does not render ANALYTICS_DATABASE_URL"
 grep -q 'name: ANALYTICS_DATABASE_URL$' <<<"$reports" || fail "the reports Deployment does not render ANALYTICS_DATABASE_URL"
 for bin in labor-projector labor-reports; do
@@ -163,6 +186,8 @@ expect_refusal "the log publisher through extraEnv" "EVENT_PUBLISHER" "${base[@]
 expect_refusal "a *_MODE through extraEnv" "*_MODE" "${base[@]}" --set 'extraEnv[0].name=FULFILLMENT_MODE' --set 'extraEnv[0].value=permissive'
 # The MCP server needs the database on its own too.
 expect_refusal "mcp without a database" "database.url or database.existingSecret" --set mcp.enabled=true --set kafka.brokers=k:9092 --set config.kafkaConsumerGroup=g
+# ... and so does the A2A agent.
+expect_refusal "a2a without a database" "database.url or database.existingSecret" --set a2a.enabled=true --set kafka.brokers=k:9092 --set config.kafkaConsumerGroup=g
 
 # --- what warehouse-infra sets keeps working -----------------------------------------
 # tests/warehouse-infra-values.yaml mirrors helm-values/labor-performance.yaml +
@@ -179,8 +204,10 @@ infra_api="$(helm template "$release" "$chart_dir" "${infra[@]}" --show-only tem
 grep -q 'labor-performance-db' <<<"$infra_api" || fail "infra values: DATABASE_URL must come from the labor-performance-db secret"
 infra_proj="$(helm template "$release" "$chart_dir" "${infra[@]}" --show-only templates/projector-deployment.yaml)"
 [[ "$(env_value "$infra_proj" KAFKA_BROKERS)" == "kafka.warehouse-systems.svc.cluster.local:9092" ]] || fail "infra values: projector KAFKA_BROKERS"
-for component in api analytics-projector analytics-reports mcp frontend; do
+for component in api analytics-projector analytics-reports mcp a2a frontend; do
   grep -q "app.kubernetes.io/component: $component" <<<"$infra_all" || fail "infra values: component $component not rendered"
 done
+helm template "$release" "$chart_dir" "${infra[@]}" --show-only templates/a2a-deployment.yaml >/dev/null || fail "infra values: a2a"
+helm template "$release" "$chart_dir" "${infra[@]}" --show-only templates/a2a-route.yaml | grep -q "replacePrefixMatch: /$" || fail "infra values: the a2a route must rewrite to /"
 
 echo "labor-performance chart render assertions passed"

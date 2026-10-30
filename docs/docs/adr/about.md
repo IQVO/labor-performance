@@ -93,6 +93,7 @@ Typos, broken links and formatting are of course fair game.
 | [0033](./0033-mcp-invocation-and-denial-counters.md) | MCP tool invocation and denial counters (governance charter §9) | Accepted |
 | [0034](./0034-postgres-and-kafka-are-the-only-runtime.md) | Postgres and Kafka are the only runtime (no in-memory mode, no log sink, no optional relay or consumer) | Accepted |
 | [0035](./0035-handling-unit-standards-and-team-lift.md) | Engineered standards per handling unit (EACH, CASE, PALLET), most specific wins, and a declared heavy-case team lift | Proposed |
+| [0036](./0036-a2a-inbound-adapter.md) | A2A inbound adapter: a read-only Agent2Agent agent (`associate_scorecard`, `task_type_status`) over the same read use cases, no write and no outbound client | Accepted |
 
 The Status column repeats each record's own `## Status` section. Four
 records whose bodies say plain **Accepted** have since been partly
