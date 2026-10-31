@@ -102,6 +102,18 @@ mcp:
   resources:
     requests:
       cpu: 25m
+a2a:
+  enabled: true
+  route:
+    enabled: true
+    path: /api/a2a/labor-performance
+    parentRefs:
+      - name: warehouse-gateway
+        namespace: kong
+        sectionName: http
+  resources:
+    requests:
+      cpu: 25m
 pathCatalogue:
   content: ''
   enabled: false

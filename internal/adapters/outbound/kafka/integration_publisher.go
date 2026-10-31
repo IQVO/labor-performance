@@ -155,7 +155,7 @@ func (p *IntegrationPublisher) newID() string {
 func integrationData(e shared.DomainEvent) (eventName, key, subject string, data map[string]any, ok bool) {
 	switch ev := e.(type) {
 	case shared.TaskPerformanceRecorded:
-		return cloudevents.EventTaskPerformanceRecorded, string(ev.AssociateId), performanceSubject(ev), map[string]any{
+		data := map[string]any{
 			"task_id":      ev.TaskId,
 			"associate_id": string(ev.AssociateId),
 			"task_type":    string(ev.TaskType),
@@ -172,7 +172,9 @@ func integrationData(e shared.DomainEvent) (eventName, key, subject string, data
 			// unaffected by its presence.
 			"idle_seconds_before": ev.IdleSecondsBefore,
 			"completed_at":        ev.CompletedAt,
-		}, true
+		}
+		addHandling(data, ev)
+		return cloudevents.EventTaskPerformanceRecorded, string(ev.AssociateId), performanceSubject(ev), data, true
 
 	default:
 		return "", "", "", nil, false

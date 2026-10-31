@@ -269,6 +269,25 @@ components:
               expected_seconds: 45
               travel_component_seconds: 15
               effective_from: "2026-09-05T09:05:00Z"
+        - name: casePickStandardWithTeamLift
+          summary: A CASE pick standard (ADR 0035) declaring a heavy-case team lift.
+          payload:
+            specversion: "1.0"
+            id: 3d1a6e24-95c7-4f3a-b081-4e0d2c6f9a57
+            source: /warehouse/labor-performance
+            type: com.warehouse.wes.labor-performance.standard.LaborStandardDefined
+            subject: std-0004
+            time: "2026-10-24T08:00:00Z"
+            datacontenttype: application/json
+            dataschema: "urn:warehouse:labor-performance:analytics:LaborStandardDefined:v1"
+            data:
+              standard_id: std-0004
+              task_type: PICK
+              expected_seconds: 30
+              effective_from: "2026-10-24T08:00:00Z"
+              handling_unit: CASE
+              team_lift_threshold_g: 18000
+              team_lift_expected_seconds: 75
 
     LaborStandardRevised:
       name: LaborStandardRevised
@@ -438,6 +457,30 @@ components:
               actual_seconds: 0
               idle_seconds_before: null
               completed_at: "2026-09-05T09:45:00Z"
+        - name: heavyCaseTeamLiftIntegration
+          summary: >-
+            A CASE pick scored against the team-lift standard (ADR 0035):
+            handling_unit and team_lift are present because the completion
+            carried a handling unit.
+          payload:
+            specversion: "1.0"
+            id: 9e4b7c15-2a68-4d03-8f51-6c0a3b9d2e78
+            source: /warehouse/labor-performance
+            type: com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded
+            subject: assoc-4471
+            time: "2026-10-24T11:00:00Z"
+            datacontenttype: application/json
+            dataschema: "urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1"
+            data:
+              task_id: task-20877
+              associate_id: assoc-4471
+              task_type: PICK
+              efficiency_pct: 100
+              actual_seconds: 75
+              idle_seconds_before: null
+              completed_at: "2026-10-24T09:30:00Z"
+              handling_unit: CASE
+              team_lift: true
 
 
     TaskCompleted:
@@ -514,6 +557,30 @@ components:
               work_unit_id: order-88423-line-1
               associate_id: assoc-4472
 
+        - name: taskCompletedHeavyCase
+          summary: >-
+            A CASE handle carrying the OPTIONAL handling_unit and weight_g
+            (ADR 0035). fulfillment-execution's TaskCompleted v1 does not
+            publish these fields today; this example shows what the
+            consumer reads when a producer adds them.
+          payload:
+            specversion: "1.0"
+            id: 5b8e2d70-14c9-4a36-9d2f-7e0a4c6b1f83
+            source: /warehouse/fulfillment-execution
+            type: com.warehouse.wes.fulfillment-execution.task.TaskCompleted
+            subject: task-10234
+            time: "2026-10-24T22:15:00Z"
+            datacontenttype: application/json
+            dataschema: "urn:warehouse:fulfillment-execution:events:TaskCompleted:v1"
+            data:
+              task_id: task-10234
+              station_id: station-3
+              work_unit_id: order-88424-line-1
+              associate_id: assoc-4472
+              duration_seconds: 75
+              task_type: PICK
+              handling_unit: CASE
+              weight_g: 20000
   schemas:
     CloudEventEnvelope:
       type: object
@@ -677,6 +744,33 @@ components:
             a real, expected "unmeasurable" business fact, not an
             error.
           example: 52
+        handling_unit:
+          type: string
+          enum: [EACH, CASE, PALLET]
+          description: >-
+            OPTIONAL, ADDITIVE (ADR 0035). The handling unit the completed
+            task handled. fulfillment-execution's TaskCompleted v1 does NOT
+            publish this field today, so on every payload published so far
+            it is absent; this service reads it when it appears (a future
+            additive field on the producer) and scores the completion
+            against the standard declared for (task_type, handling_unit),
+            falling back to the task-type-only standard. Absent, null, not
+            a string or any other value (e.g. INNER) is treated as absent:
+            the completion is scored exactly as before ADR 0035.
+          example: CASE
+        weight_g:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            OPTIONAL, ADDITIVE (ADR 0035). The weight in grams of the
+            handled case. Only meaningful with handling_unit CASE: when the
+            CASE standard declares a team lift and weight_g is strictly
+            greater than its threshold, the team-lift standard time scores
+            the completion. Absent, null, non-integer or non-positive means
+            unknown, never a team lift (a weight is never guessed). Not
+            published by fulfillment-execution's TaskCompleted v1 today.
+          example: 20000
 
     LaborStandardDefinedData:
       type: object
@@ -712,6 +806,32 @@ components:
             validates it against a live location lookup (ADR
             0015).
           example: 15
+        handling_unit:
+          type: string
+          enum: [EACH, CASE, PALLET]
+          description: >-
+            ADDITIVE (ADR 0035). Present only when the standard is
+            declared for one handling unit; omitted entirely (not null)
+            for a task-type-only standard.
+          example: CASE
+        team_lift_threshold_g:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            ADDITIVE (ADR 0035). CASE standards only: the weight in grams
+            above which a case needs a team lift (two operators). Present
+            only together with team_lift_expected_seconds.
+          example: 18000
+        team_lift_expected_seconds:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            ADDITIVE (ADR 0035). CASE standards only: the engineered
+            elapsed seconds of a team lift. Present only together with
+            team_lift_threshold_g.
+          example: 75
         effective_from:
           type: string
           format: date-time
@@ -761,6 +881,32 @@ components:
             the closed prior standard. Omitted entirely when the
             revision does not declare one.
           example: 20
+        handling_unit:
+          type: string
+          enum: [EACH, CASE, PALLET]
+          description: >-
+            ADDITIVE (ADR 0035). Describes the NEW standard. Present only when the standard is
+            declared for one handling unit; omitted entirely (not null)
+            for a task-type-only standard.
+          example: CASE
+        team_lift_threshold_g:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            ADDITIVE (ADR 0035). CASE standards only: the weight in grams
+            above which a case needs a team lift (two operators). Present
+            only together with team_lift_expected_seconds.
+          example: 18000
+        team_lift_expected_seconds:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            ADDITIVE (ADR 0035). CASE standards only: the engineered
+            elapsed seconds of a team lift. Present only together with
+            team_lift_threshold_g.
+          example: 75
         effective_from:
           type: string
           format: date-time
@@ -837,6 +983,23 @@ components:
             a Conformist unmarshaling unknown-field-tolerant
             JSON is unaffected by its presence.
           example: 90
+        handling_unit:
+          type: string
+          enum: [EACH, CASE, PALLET]
+          description: >-
+            ADDITIVE (ADR 0035). The handling unit the completed task
+            carried; omitted entirely (not null) when the TaskCompleted
+            event carried none, so a completion without one keeps the
+            pre-ADR-0035 payload byte-for-byte.
+          example: CASE
+        team_lift:
+          type: boolean
+          description: >-
+            ADDITIVE (ADR 0035). Present only together with handling_unit.
+            True when the completion was scored against the CASE
+            standard's team-lift time (the case was heavier than the
+            declared threshold).
+          example: false
         completed_at:
           type: string
           format: date-time
@@ -903,6 +1066,23 @@ components:
             tolerant JSON (e.g. workforce-management's
             laborperformancecache) is unaffected by its presence.
           example: 90
+        handling_unit:
+          type: string
+          enum: [EACH, CASE, PALLET]
+          description: >-
+            ADDITIVE (ADR 0035). The handling unit the completed task
+            carried; omitted entirely (not null) when the TaskCompleted
+            event carried none, so a completion without one keeps the
+            pre-ADR-0035 payload byte-for-byte.
+          example: CASE
+        team_lift:
+          type: boolean
+          description: >-
+            ADDITIVE (ADR 0035). Present only together with handling_unit.
+            True when the completion was scored against the CASE
+            standard's team-lift time (the case was heavier than the
+            declared threshold).
+          example: false
         completed_at:
           type: string
           format: date-time

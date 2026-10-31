@@ -18,6 +18,7 @@ import (
 	"github.com/claudioed/labor-performance/internal/application/ports"
 	"github.com/claudioed/labor-performance/internal/application/usecases"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
+	"github.com/claudioed/labor-performance/internal/domain/standard"
 )
 
 // DefaultServiceName labels this service in logs, spans and metrics when
@@ -130,13 +131,26 @@ func (s *Server) handleDefineStandard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, err := s.DefineStandard.Execute(r.Context(), taskType, req.ExpectedSeconds, req.TravelComponentSeconds)
+	unit, err := shared.NewHandlingUnit(req.HandlingUnit)
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.TravelComponentSeconds(), st.EffectiveFrom(), st.EffectiveTo()))
+	spec := usecases.DefineStandardSpec{
+		TaskType: taskType, HandlingUnit: unit,
+		ExpectedSeconds: req.ExpectedSeconds, TravelComponentSeconds: req.TravelComponentSeconds,
+	}
+	if req.TeamLift != nil {
+		spec.TeamLift = &usecases.TeamLiftSpec{ThresholdG: req.TeamLift.ThresholdG, ExpectedSeconds: req.TeamLift.ExpectedSeconds}
+	}
+	st, err := s.DefineStandard.ExecuteSpec(r.Context(), spec)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, standardResponseOf(st))
 }
 
 func (s *Server) handleGetStandard(w http.ResponseWriter, r *http.Request) {
@@ -146,13 +160,23 @@ func (s *Server) handleGetStandard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, err := s.GetStandard.Execute(r.Context(), taskType)
+	// The optional handlingUnit query asks "which standard applies to this
+	// handle": the unit's own standard when declared, else the task-type-
+	// only one (most specific wins, ADR 0035). Without it the answer is the
+	// task-type-only standard, as before.
+	unit, err := shared.NewHandlingUnit(r.URL.Query().Get("handlingUnit"))
 	if err != nil {
 		writeError(w, r, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.TravelComponentSeconds(), st.EffectiveFrom(), st.EffectiveTo()))
+	st, err := s.GetStandard.ExecuteResolved(r.Context(), taskType, unit)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, standardResponseOf(st))
 }
 
 func (s *Server) handleGetAssociateScorecard(w http.ResponseWriter, r *http.Request) {
@@ -261,6 +285,17 @@ func toStandardResponse(taskType shared.TaskType, expectedSeconds int64, travelC
 		EffectiveFrom:          effectiveFrom.UTC().Format(timeFormat),
 		EffectiveTo:            to,
 	}
+}
+
+// standardResponseOf maps a LaborStandard to its response body, adding the
+// ADR 0035 handling-unit fields only when the standard has them.
+func standardResponseOf(st *standard.LaborStandard) standardResponse {
+	resp := toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.TravelComponentSeconds(), st.EffectiveFrom(), st.EffectiveTo())
+	resp.HandlingUnit = string(st.HandlingUnit())
+	if tl := st.TeamLift(); tl != nil {
+		resp.TeamLift = &teamLiftResponse{ThresholdG: tl.ThresholdG(), ExpectedSeconds: tl.ExpectedSeconds(), Operators: tl.Operators()}
+	}
+	return resp
 }
 
 func toScorecardResponse(sc ports.Scorecard) scorecardResponse {

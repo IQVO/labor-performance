@@ -44,11 +44,15 @@ func (r *StandardRepo) Save(_ context.Context, s *standard.LaborStandard) error 
 	return nil
 }
 
-func (r *StandardRepo) FindActiveAsOf(_ context.Context, taskType shared.TaskType, t time.Time) (*standard.LaborStandard, error) {
+func (r *StandardRepo) FindActiveAsOf(ctx context.Context, taskType shared.TaskType, t time.Time) (*standard.LaborStandard, error) {
+	return r.FindActiveAsOfForUnit(ctx, taskType, "", t)
+}
+
+func (r *StandardRepo) FindActiveAsOfForUnit(_ context.Context, taskType shared.TaskType, unit shared.HandlingUnit, t time.Time) (*standard.LaborStandard, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, s := range r.standards {
-		if s.TaskType() == taskType && s.IsActiveAt(t) {
+		if s.TaskType() == taskType && s.HandlingUnit() == unit && s.IsActiveAt(t) {
 			cp := *s
 			return &cp, nil
 		}
@@ -58,6 +62,10 @@ func (r *StandardRepo) FindActiveAsOf(_ context.Context, taskType shared.TaskTyp
 
 func (r *StandardRepo) FindCurrentlyActive(ctx context.Context, taskType shared.TaskType) (*standard.LaborStandard, error) {
 	return r.FindActiveAsOf(ctx, taskType, time.Now())
+}
+
+func (r *StandardRepo) FindCurrentlyActiveForUnit(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit) (*standard.LaborStandard, error) {
+	return r.FindActiveAsOfForUnit(ctx, taskType, unit, time.Now())
 }
 
 func (r *StandardRepo) NextID(_ context.Context) (shared.StandardId, error) {

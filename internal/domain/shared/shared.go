@@ -75,3 +75,51 @@ type AssociateId string
 // append-only history — a revision mints a new StandardId rather than
 // reusing the prior one).
 type StandardId string
+
+// HandlingUnit is the packaging level a unit of work handles: one EACH
+// (a single sellable unit), one CASE (a sealed master case) or one PALLET.
+// The three values are the handling-unit subset of the fleet's pack-level
+// vocabulary (product-master's EACH|INNER|CASE|PALLET; INNER is not
+// implemented by any flow in v1 and is deliberately not modelled here).
+// The zero value ("") means "no handling unit": the standard or the
+// completed task is about the task type alone, which is exactly this
+// context's behaviour before ADR 0035. See ADR 0035.
+type HandlingUnit string
+
+const (
+	Each   HandlingUnit = "EACH"
+	Case   HandlingUnit = "CASE"
+	Pallet HandlingUnit = "PALLET"
+)
+
+// ErrUnknownHandlingUnit is returned when a caller-supplied (REST) handling
+// unit string is not one of EACH, CASE or PALLET.
+var ErrUnknownHandlingUnit = errors.New("unknown handling unit: must be EACH, CASE, or PALLET")
+
+// NewHandlingUnit validates a caller-supplied handling unit string. The
+// empty string is valid and means "no handling unit" (the task type alone);
+// any other value must be EACH, CASE or PALLET. Used at the REST boundary,
+// where a mistake is worth a 400. Contrast with ParseHandlingUnitLenient.
+func NewHandlingUnit(value string) (HandlingUnit, error) {
+	switch HandlingUnit(value) {
+	case "", Each, Case, Pallet:
+		return HandlingUnit(value), nil
+	default:
+		return "", ErrUnknownHandlingUnit
+	}
+}
+
+// ParseHandlingUnitLenient coerces raw into a known HandlingUnit, or ""
+// (no handling unit) when raw is empty or not one of the three values. Used
+// only when consuming a TaskCompleted Kafka event: a handling unit this
+// context does not recognise (INNER, a future level) must never block
+// recording a real completion, it degrades to the task-type-only standard
+// exactly like an absent field does.
+func ParseHandlingUnitLenient(raw string) HandlingUnit {
+	switch HandlingUnit(raw) {
+	case Each, Case, Pallet:
+		return HandlingUnit(raw)
+	default:
+		return ""
+	}
+}

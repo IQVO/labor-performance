@@ -201,6 +201,7 @@ func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, 
 		if ev.TravelComponentSeconds != nil {
 			fields["travel_component_seconds"] = *ev.TravelComponentSeconds
 		}
+		addStandardHandling(fields, ev.HandlingUnit, ev.TeamLiftThresholdG, ev.TeamLiftExpectedSeconds)
 		return cloudevents.EventLaborStandardDefined, cloudevents.EntityStandard, string(ev.TaskType), string(ev.StandardId), fields, true
 
 	case shared.LaborStandardRevised:
@@ -214,10 +215,11 @@ func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, 
 		if ev.NewTravelComponentSeconds != nil {
 			fields["travel_component_seconds"] = *ev.NewTravelComponentSeconds
 		}
+		addStandardHandling(fields, ev.HandlingUnit, ev.TeamLiftThresholdG, ev.TeamLiftExpectedSeconds)
 		return cloudevents.EventLaborStandardRevised, cloudevents.EntityStandard, string(ev.TaskType), string(ev.StandardId), fields, true
 
 	case shared.TaskPerformanceRecorded:
-		return cloudevents.EventTaskPerformanceRecorded, cloudevents.EntityPerformance, string(ev.TaskType), performanceSubject(ev), map[string]any{
+		data := map[string]any{
 			"task_id":      ev.TaskId,
 			"associate_id": string(ev.AssociateId),
 			"task_type":    string(ev.TaskType),
@@ -232,7 +234,9 @@ func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, 
 			// fabricated 0.
 			"idle_seconds_before": ev.IdleSecondsBefore,
 			"completed_at":        ev.CompletedAt,
-		}, true
+		}
+		addHandling(data, ev)
+		return cloudevents.EventTaskPerformanceRecorded, cloudevents.EntityPerformance, string(ev.TaskType), performanceSubject(ev), data, true
 
 	default:
 		return "", "", "", "", nil, false

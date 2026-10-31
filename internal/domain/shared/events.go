@@ -40,6 +40,22 @@ type LaborStandardDefined struct {
 	// and ADR 0015.
 	TravelComponentSeconds *int64
 	EffectiveFrom          time.Time
+	// HandlingUnit, TeamLiftThresholdG and TeamLiftExpectedSeconds are the
+	// additive ADR 0035 fields: "" / nil for a task-type-only standard
+	// (every standard before ADR 0035). Set through WithHandling.
+	HandlingUnit            HandlingUnit
+	TeamLiftThresholdG      *int64
+	TeamLiftExpectedSeconds *int64
+}
+
+// WithHandling returns the event carrying the standard's handling unit and
+// optional team-lift declaration (ADR 0035). The constructor is unchanged so
+// every pre-ADR-0035 caller keeps compiling and producing the same event.
+func (e LaborStandardDefined) WithHandling(unit HandlingUnit, teamLiftThresholdG, teamLiftExpectedSeconds *int64) LaborStandardDefined {
+	e.HandlingUnit = unit
+	e.TeamLiftThresholdG = teamLiftThresholdG
+	e.TeamLiftExpectedSeconds = teamLiftExpectedSeconds
+	return e
 }
 
 func NewLaborStandardDefined(occurredAt time.Time, id StandardId, taskType TaskType, expectedSeconds int64, travelComponentSeconds *int64, effectiveFrom time.Time) LaborStandardDefined {
@@ -69,6 +85,20 @@ type LaborStandardRevised struct {
 	// LaborStandard row exactly as it was.
 	NewTravelComponentSeconds *int64
 	EffectiveFrom             time.Time
+	// HandlingUnit, TeamLiftThresholdG and TeamLiftExpectedSeconds describe
+	// the NEW standard (ADR 0035); "" / nil for a task-type-only standard.
+	HandlingUnit            HandlingUnit
+	TeamLiftThresholdG      *int64
+	TeamLiftExpectedSeconds *int64
+}
+
+// WithHandling returns the event carrying the new standard's handling unit
+// and optional team-lift declaration (ADR 0035).
+func (e LaborStandardRevised) WithHandling(unit HandlingUnit, teamLiftThresholdG, teamLiftExpectedSeconds *int64) LaborStandardRevised {
+	e.HandlingUnit = unit
+	e.TeamLiftThresholdG = teamLiftThresholdG
+	e.TeamLiftExpectedSeconds = teamLiftExpectedSeconds
+	return e
 }
 
 func NewLaborStandardRevised(occurredAt time.Time, id StandardId, taskType TaskType, previousExpectedSeconds, newExpectedSeconds int64, newTravelComponentSeconds *int64, effectiveFrom time.Time) LaborStandardRevised {
@@ -105,6 +135,20 @@ type TaskPerformanceRecorded struct {
 	// its ADR for the full "Idle Gap" vocabulary.
 	IdleSecondsBefore *int64
 	CompletedAt       time.Time
+	// HandlingUnit is the handling unit the completed task carried ("" when
+	// none) and TeamLift whether the team-lift standard scored it. ADDITIVE
+	// (ADR 0035): published only when HandlingUnit is non-empty. Set through
+	// WithHandling.
+	HandlingUnit HandlingUnit
+	TeamLift     bool
+}
+
+// WithHandling returns the event carrying the handling unit the completion
+// was scored for and whether it was a team lift (ADR 0035).
+func (e TaskPerformanceRecorded) WithHandling(unit HandlingUnit, teamLift bool) TaskPerformanceRecorded {
+	e.HandlingUnit = unit
+	e.TeamLift = teamLift
+	return e
 }
 
 func NewTaskPerformanceRecorded(occurredAt time.Time, taskId string, associateId AssociateId, taskType TaskType, actualSeconds int64, efficiencyPct *float64, idleSecondsBefore *int64, completedAt time.Time) TaskPerformanceRecorded {

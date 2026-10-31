@@ -27,6 +27,7 @@ package kafka
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -88,6 +89,16 @@ type taskCompletedData struct {
 	AssociateId     string `json:"associate_id"`
 	DurationSeconds int64  `json:"duration_seconds"`
 	TaskType        string `json:"task_type"`
+	// HandlingUnit and WeightG are the OPTIONAL, additive handling-unit
+	// resolution inputs of ADR 0035. fulfillment-execution's TaskCompleted
+	// v1 does not carry them today (its data holds neither a handling unit
+	// nor a case weight), so on every payload published so far they are
+	// absent and the completion is scored against the task-type-only
+	// standard exactly as before. They are kept raw and parsed leniently
+	// (see handlingFrom): a malformed optional field must degrade to
+	// "absent", never fail the decode and dead-letter a real completion.
+	HandlingUnit json.RawMessage `json:"handling_unit,omitempty"`
+	WeightG      json.RawMessage `json:"weight_g,omitempty"`
 }
 
 // Consumer consumes warehouse.fulfillment.events, feeding TaskCompleted
@@ -331,6 +342,8 @@ func (c *Consumer) handleFulfillmentEvent(ctx context.Context, evt ce.Event) err
 		TaskId:        data.TaskId,
 		AssociateId:   shared.AssociateId(data.AssociateId),
 		TaskType:      shared.ParseTaskTypeLenient(data.TaskType),
+		HandlingUnit:  handlingUnitFrom(data.HandlingUnit),
+		WeightG:       weightGFrom(data.WeightG),
 		ActualSeconds: data.DurationSeconds,
 		CompletedAt:   evt.Time(),
 	})

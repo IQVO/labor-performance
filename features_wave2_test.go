@@ -551,4 +551,6 @@ func registerWave2(sc *godog.ScenarioContext, w *world) {
 
 	sc.Step(`^the utilization for associate "([^"]*)" is requested with window "([^"]*)"$`, s.associateUtilizationWindowed)
 	sc.Step(`^a standard definition with a malformed JSON body is sent$`, s.malformedStandardBody)
+
+	registerHandlingUnit(sc, w, s) // features_handling_test.go
 }

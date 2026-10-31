@@ -16,6 +16,30 @@ type defineStandardRequest struct {
 	// dependency in either direction with any sibling context (ADR
 	// 0015). Omitted entirely means "not broken out", the default.
 	TravelComponentSeconds *int64 `json:"travelComponentSeconds,omitempty"`
+	// HandlingUnit is OPTIONAL (ADR 0035): EACH, CASE or PALLET declares
+	// the standard for that handling unit, which wins over the task-type-
+	// only standard when a completed task carries that unit. Absent (or
+	// empty) declares the task-type-only standard, exactly as before.
+	HandlingUnit string `json:"handlingUnit,omitempty"`
+	// TeamLift is OPTIONAL and only valid with handlingUnit CASE: the
+	// declared heavy-case rule (ADR 0035).
+	TeamLift *teamLiftRequest `json:"teamLift,omitempty"`
+}
+
+// teamLiftRequest is the declared heavy-case team-lift rule of a CASE
+// standard: a case heavier than ThresholdG grams needs two operators and is
+// scored against ExpectedSeconds.
+type teamLiftRequest struct {
+	ThresholdG      int64 `json:"thresholdG"`
+	ExpectedSeconds int64 `json:"expectedSeconds"`
+}
+
+// teamLiftResponse echoes a declared team lift; Operators is the constant
+// number of operators a team lift needs.
+type teamLiftResponse struct {
+	ThresholdG      int64 `json:"thresholdG"`
+	ExpectedSeconds int64 `json:"expectedSeconds"`
+	Operators       int   `json:"operators"`
 }
 
 // standardResponse is the response body for DefineStandard and
@@ -28,6 +52,10 @@ type standardResponse struct {
 	TravelComponentSeconds *int64  `json:"travelComponentSeconds,omitempty"`
 	EffectiveFrom          string  `json:"effectiveFrom"`
 	EffectiveTo            *string `json:"effectiveTo,omitempty"`
+	// HandlingUnit and TeamLift are omitted entirely for a task-type-only
+	// standard, so its body is byte-for-byte what it was before ADR 0035.
+	HandlingUnit string            `json:"handlingUnit,omitempty"`
+	TeamLift     *teamLiftResponse `json:"teamLift,omitempty"`
 }
 
 // taskTypeBreakdownResponse is one TaskType's slice of a
