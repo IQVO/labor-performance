@@ -219,7 +219,7 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install Schemathesis (pinned)
-        run: python3 -m pip install "schemathesis==4.28.0"
+        run: python3 -m pip install --require-hashes -r .github/requirements/schemathesis.txt
       - name: Contract tests (Schemathesis over apis/openapi.yaml)
         env:
           DATABASE_URL: "postgres://labor:labor@localhost:5432/labor?sslmode=disable"
