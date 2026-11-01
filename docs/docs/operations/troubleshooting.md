@@ -60,8 +60,9 @@ All REST errors are RFC 7807 `application/problem+json` bodies with
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | 400 `idempotency-key-required` on `POST /standards` | The `Idempotency-Key` header is missing. It is always required, since Postgres is always on ([ADR 0016](../adr/0016-idempotency-key-middleware.md)). | Send a fresh UUID per logical request. |
-| 422 `idempotency-key-reused` | The same key was sent with a **different** body. The SHA-256 hash of the body did not match the stored `request_hash`. | Use a new key for a genuinely new request. |
-| A retry returns exactly the first response again, even a 4xx | Same key and same body: the stored outcome is replayed. Every non-panic outcome is cached for `IDEMPOTENCY_KEY_TTL`. | Expected. To try again with different values, use a new key. |
+| 400 `idempotency-key-invalid` | The `Idempotency-Key` is not 1-128 printable ASCII characters (too long, a control character, or non-ASCII). Nothing was executed or stored ([ADR 0037](../adr/0037-adopt-fleet-rest-api-guideline.md)). | Send a UUID. |
+| 409 `idempotency-key-reused` | The same key was sent with a **different** method, path or body (the fingerprint is method + path + SHA-256 of the body, and the key is global). Nothing was executed. Distinguish it from the business 409s by the problem type. | Use a new key for a genuinely new request. Never retry blindly with the same key. |
+| A retry returns exactly the first response again, even a 4xx | Same key and same request: the stored outcome is replayed, with the response header `Idempotency-Replayed: true`. Every 2xx and 4xx outcome is cached for `IDEMPOTENCY_KEY_TTL`; a 5xx or a panic rolls back and is **not** stored, so its retry executes again. | Expected. To try again with different values, use a new key. |
 | 409 `concurrent-modification` | Two `DefineStandard` calls raced on the same prior standard, and the optimistic `version` check lost ([ADR 0022](../adr/0022-optimistic-concurrency-one-open-standard.md)). | Re-read with `GET /standards/{taskType}` and retry with a new key. |
 | 409 `standard-conflict` | The unique "one open standard per task type" index (23505) rejected a second open standard. | Same as above. |
 | 422 `non-positive-expected-seconds`, `negative-travel-component-seconds`, `travel-component-exceeds-expected-seconds` | The `LaborStandard` invariants rejected the values. These also count as `outcome=rejected` on the metric. | Fix the payload. |
@@ -99,9 +100,10 @@ MCP calls, so nothing can trip one.
 | `non-positive-expected-seconds`, `negative-travel-component-seconds`, `travel-component-exceeds-expected-seconds` | 422 | `standard.New` |
 | `malformed-request-body` | 400 | JSON decode, or body read in the idempotency middleware |
 | `idempotency-key-required` | 400 | `RequireIdempotencyKey` |
+| `idempotency-key-invalid` | 400 | `RequireIdempotencyKey` |
 | `dependency-unavailable` | 503 | `/readyz` (Postgres or Kafka check failed) |
 | `resource-not-found` | 404 | NUL in the path (`rejectNUL`), unknown route |
-| `idempotency-key-reused` | 422 | `RequireIdempotencyKey` |
+| `idempotency-key-reused` | 409 | `RequireIdempotencyKey` |
 | `invalid-report-query` | 400 | Reports API |
 | `report-store-error` | 500 | Reports API |
 | `internal-error` | 500 | Any unmapped error |

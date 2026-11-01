@@ -16,6 +16,8 @@ record. Ported from order-management's reference implementation
 
 > **Runtime modes superseded by [ADR-0034](./0034-postgres-and-kafka-are-the-only-runtime.md).** The "nil pool in the in-memory dev configuration" case described below is retired for the shipped binary: Postgres is the only runtime, so the middleware is always on (the nil pool remains only in handler unit tests), `Idempotency-Key` is `required: true` in the spec, and a NUL in a body is rejected (400) before the middleware records the key.
 
+> **Amended by [ADR-0037](./0037-adopt-fleet-rest-api-guideline.md) (fleet REST API guideline).** Wherever this record says the same key with a different body is answered `422`, it is now `409 idempotency-key-reused` (the fingerprint is method + path + SHA-256(body), and the key is global); a replay carries `Idempotency-Replayed: true`; a key that is not 1-128 printable ASCII characters is `400 idempotency-key-invalid`; and a `5xx` rolls the transaction back and is never stored.
+
 ## Context
 
 `POST /standards` (`DefineStandard`) is this service's **one true
