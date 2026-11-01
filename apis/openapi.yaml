@@ -100,13 +100,15 @@ paths:
         `teamLift` (ADR 0035).
 
 
-        Idempotent retries: clients MUST always send a non-empty
-        `Idempotency-Key` header (any unique value per logical request);
-        a retried request with the same key and body replays the original
-        response byte-for-byte instead of defining the standard a second
-        time.
+        Idempotent retries: clients MUST always send an `Idempotency-Key`
+        header (1-128 printable ASCII characters, a client-generated UUID
+        per logical submit); a retried request with the same key, method,
+        path and body replays the original response byte-for-byte, with the
+        response header `Idempotency-Replayed: true`, instead of defining
+        the standard a second time. The same key with a different method,
+        path or body is 409 `idempotency-key-reused`.
       parameters:
-        - $ref: "#/components/parameters/IdempotencyKeyHeader"
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -137,6 +139,9 @@ paths:
       responses:
         "201":
           description: Standard defined (or the revision recorded)
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
           content:
             application/json:
               schema:
@@ -144,19 +149,23 @@ paths:
         "400":
           description: >
             Unknown task type, unknown handling unit (not EACH, CASE or
-            PALLET), malformed body, or a missing/empty Idempotency-Key
-            header on a route protected by the idempotency middleware.
+            PALLET), malformed body, a missing Idempotency-Key header
+            (idempotency-key-required), or an Idempotency-Key that is not
+            1-128 printable ASCII characters (idempotency-key-invalid).
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
         "409":
           description: >
-            The write lost a concurrency race: another writer modified the
-            same labor standard after this request's snapshot
+            The Idempotency-Key was already used with a different method,
+            path or body (idempotency-key-reused), the write lost a
+            concurrency race: another writer modified the same labor
+            standard after this request's snapshot
             (concurrent-modification), or another standard is already open
             for this task type and handling unit (standard-conflict).
-            Re-fetch and retry.
+            Re-fetch and retry; never retry an idempotency-key-reused with
+            the same key.
           content:
             application/problem+json:
               schema:
@@ -164,12 +173,10 @@ paths:
         "422":
           description: >-
             Expected seconds must be greater than zero, travelComponentSeconds
-            is negative or exceeds expectedSeconds, a teamLift is declared on
-            a standard whose handlingUnit is not CASE
+            is negative or exceeds expectedSeconds, or a teamLift is declared
+            on a standard whose handlingUnit is not CASE
             (team-lift-requires-case-unit) or with a non-positive thresholdG
-            or expectedSeconds, or the Idempotency-Key header on this request
-            was already used with a different request body
-            (idempotency-key-reused).
+            or expectedSeconds.
           content:
             application/problem+json:
               schema:
@@ -346,21 +353,27 @@ components:
       required: true
       schema:
         $ref: "#/components/schemas/TaskType"
-    IdempotencyKeyHeader:
+    IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: true
       description: >
-        A caller-minted unique key per logical request (e.g. a UUID).
-        Clients must always send a non-empty key on POST /standards: a
-        retry carrying the same key and an identical body replays the
-        original stored response instead of re-executing the create; the
-        same key with a different body is rejected with 422
-        idempotency-key-reused, and a missing or empty key is a 400
-        idempotency-key-required. Postgres is the only runtime, so the
-        check is on in every deployment.
+        A client-generated unique key per logical submit (a UUID; 1-128
+        printable ASCII characters). Clients must always send it on POST
+        /standards: a retry carrying the same key, method, path and an
+        identical body replays the original stored response (with the
+        response header `Idempotency-Replayed: true`) instead of
+        re-executing the create; the same key with a different method, path
+        or body is rejected with 409 idempotency-key-reused, a missing key
+        is a 400 idempotency-key-required and a malformed one a 400
+        idempotency-key-invalid. Postgres is the only runtime, so the check
+        is on in every deployment.
       schema:
         type: string
+        minLength: 1
+        maxLength: 128
+        pattern: "^[ -~]+$"
+        example: 3f9c1e52-7d1a-4b0e-9a55-2c6f4e8a1b07
     HandlingUnitQueryParam:
       name: handlingUnit
       in: query
@@ -381,6 +394,15 @@ components:
       schema:
         type: string
         example: "1h"
+  headers:
+    IdempotencyReplayed:
+      description: >-
+        Set to `true` on a replay of a stored answer (a retry carrying the
+        same Idempotency-Key, method, path and body), and only on a replay:
+        the first execution of a key never carries it.
+      schema:
+        type: string
+        enum: ["true"]
   schemas:
     TaskType:
       type: string
