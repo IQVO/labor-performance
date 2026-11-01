@@ -61,7 +61,8 @@ Adopt the guideline as written. What it means for labor-performance:
    - Same key, same fingerprint: the stored answer (status, body, headers) is
      replayed byte for byte with `Idempotency-Replayed: true`; the handler
      does not run again. The first execution never carries the header.
-     `Idempotent-Replayed` is retired.
+     The retired past-tense spelling of the header is gone from code, spec,
+     tests and docs.
    - Same key, different method, path or body: **`409 Conflict`**, problem
      `idempotency-key-reused` (was `422`). It never executes anything and
      never carries `Idempotency-Replayed`. A business `409`
@@ -110,8 +111,8 @@ service has no `PUT`).
 ## Consequences
 
 - A client that relied on `422 idempotency-key-reused` must now handle `409`;
-  a client that checked `Idempotent-Replayed` (none in the fleet) must check
-  `Idempotency-Replayed`.
+  a client that read the old past-tense replay header (none in the fleet)
+  must read `Idempotency-Replayed`.
 - A key longer than 128 characters, or with a non-printable or non-ASCII
   character, is `400 idempotency-key-invalid` instead of being stored.
 - A transient `5xx` no longer poisons a key: the retry with the same key
