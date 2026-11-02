@@ -166,6 +166,9 @@ func TestIdempotency_Replay_SameKeySameBody_ReturnsIdenticalResponseNoDuplicate(
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first call status = %d, want 201 (body: %s)", first.Code, first.Body.String())
 	}
+	if got := first.Header().Get(inboundhttp.IdempotencyReplayedHeader); got != "" {
+		t.Fatalf("first execution carries %s: %q, want it absent", inboundhttp.IdempotencyReplayedHeader, got)
+	}
 	second := doPost()
 	if second.Code != first.Code {
 		t.Fatalf("replay status = %d, want %d", second.Code, first.Code)
@@ -173,13 +176,18 @@ func TestIdempotency_Replay_SameKeySameBody_ReturnsIdenticalResponseNoDuplicate(
 	if second.Body.String() != first.Body.String() {
 		t.Fatalf("replay body differs:\nfirst:  %s\nsecond: %s", first.Body.String(), second.Body.String())
 	}
+	if got := second.Header().Get(inboundhttp.IdempotencyReplayedHeader); got != "true" {
+		t.Fatalf("replay %s = %q, want \"true\"", inboundhttp.IdempotencyReplayedHeader, got)
+	}
 	if got := countStandardRows(t, pool); got != 1 {
 		t.Fatalf("labor_standards rows after replay = %d, want exactly 1 (no duplicate standard created)", got)
 	}
 }
 
-// TestIdempotency_SameKeyDifferentBody_Returns422 is scenario (c).
-func TestIdempotency_SameKeyDifferentBody_Returns422(t *testing.T) {
+// TestIdempotency_SameKeyDifferentBody_Returns409 is scenario (c): the same
+// key with another body is 409 idempotency-key-reused (never 422), and it
+// is not a replay.
+func TestIdempotency_SameKeyDifferentBody_Returns409(t *testing.T) {
 	pool := idempotencyDB(t)
 	router := newIdempotencyRouter(t, pool)
 
@@ -199,8 +207,11 @@ func TestIdempotency_SameKeyDifferentBody_Returns422(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	router.ServeHTTP(rec2, req2)
 
-	if rec2.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (body: %s)", rec2.Code, rec2.Body.String())
+	if rec2.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", rec2.Code, rec2.Body.String())
+	}
+	if got := rec2.Header().Get(inboundhttp.IdempotencyReplayedHeader); got != "" {
+		t.Fatalf("a key-reuse conflict carries %s: %q, want it absent", inboundhttp.IdempotencyReplayedHeader, got)
 	}
 	var problem struct {
 		Type string `json:"type"`

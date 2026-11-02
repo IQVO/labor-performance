@@ -119,6 +119,7 @@ const sidebars: SidebarsConfig = {
         'adr/0034-postgres-and-kafka-are-the-only-runtime',
         'adr/0035-handling-unit-standards-and-team-lift',
         'adr/0036-a2a-inbound-adapter',
+        'adr/0037-adopt-fleet-rest-api-guideline',
       ],
     },
   ],
