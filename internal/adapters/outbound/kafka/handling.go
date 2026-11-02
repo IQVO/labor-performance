@@ -2,6 +2,10 @@ package kafka
 
 import "github.com/claudioed/labor-performance/internal/domain/shared"
 
+// taskTypeKey is the JSON key carrying the task type in every CloudEvents
+// data payload this publisher builds (both streams, all event kinds).
+const taskTypeKey = "task_type"
+
 // addHandling adds the ADR 0035 fields to a TaskPerformanceRecorded payload,
 // ONLY when the completion carried a handling unit. A completion without
 // one keeps the exact pre-ADR-0035 payload (additive, never null-filled), so

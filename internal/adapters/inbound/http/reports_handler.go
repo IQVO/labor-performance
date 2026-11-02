@@ -136,7 +136,7 @@ func (h *ReportsHandlers) GetPerformanceFreshness(w http.ResponseWriter, r *http
 
 // GetReportsHealthz serves GET /healthz for the reports service.
 func (h *ReportsHandlers) GetReportsHealthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{statusKey: "ok"})
 }
 
 // toReportDTO maps the read model onto the wire shape. Slices are built

@@ -194,7 +194,7 @@ func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, 
 	case shared.LaborStandardDefined:
 		fields := map[string]any{
 			"standard_id":      string(ev.StandardId),
-			"task_type":        string(ev.TaskType),
+			taskTypeKey:        string(ev.TaskType),
 			"expected_seconds": ev.ExpectedSeconds,
 			"effective_from":   ev.EffectiveFrom,
 		}
@@ -207,7 +207,7 @@ func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, 
 	case shared.LaborStandardRevised:
 		fields := map[string]any{
 			"standard_id":               string(ev.StandardId),
-			"task_type":                 string(ev.TaskType),
+			taskTypeKey:                 string(ev.TaskType),
 			"previous_expected_seconds": ev.PreviousExpectedSeconds,
 			"expected_seconds":          ev.NewExpectedSeconds,
 			"effective_from":            ev.EffectiveFrom,
@@ -222,7 +222,7 @@ func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, 
 		data := map[string]any{
 			"task_id":      ev.TaskId,
 			"associate_id": string(ev.AssociateId),
-			"task_type":    string(ev.TaskType),
+			taskTypeKey:    string(ev.TaskType),
 			// A nil EfficiencyPct marshals to JSON null, which the
 			// projector decodes back to nil — the "unscorable" fact
 			// travels over the wire intact rather than degrading to 0.

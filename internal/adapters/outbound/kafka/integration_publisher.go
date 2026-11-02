@@ -158,7 +158,7 @@ func integrationData(e shared.DomainEvent) (eventName, key, subject string, data
 		data := map[string]any{
 			"task_id":      ev.TaskId,
 			"associate_id": string(ev.AssociateId),
-			"task_type":    string(ev.TaskType),
+			taskTypeKey:    string(ev.TaskType),
 			// A nil EfficiencyPct marshals to JSON null, which a
 			// consumer must not coerce to 0 — the "unscorable" fact
 			// travels over the wire intact, exactly as it does on the

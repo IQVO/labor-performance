@@ -68,6 +68,11 @@ type Deps struct {
 // this surface is unauthenticated by the same fleet-wide decision as REST and
 // MCP (ADR 0012); schemes are added here, not in a redesign, if that decision
 // is ever reversed.
+
+// contentTypeJSON is the MIME content type every A2A content mode uses; a
+// constant so the card and the per-skill input modes can never drift apart.
+const contentTypeJSON = "application/json"
+
 func Card(cfg Config) *a2a.AgentCard {
 	return &a2a.AgentCard{
 		Name:        "labor-performance",
@@ -80,8 +85,8 @@ func Card(cfg Config) *a2a.AgentCard {
 		SupportedInterfaces: []*a2a.AgentInterface{
 			a2a.NewAgentInterface(cfg.AgentURL, a2a.TransportProtocolJSONRPC),
 		},
-		DefaultInputModes:  []string{"application/json", "text/plain"},
-		DefaultOutputModes: []string{"application/json", "text/plain"},
+		DefaultInputModes:  []string{contentTypeJSON, "text/plain"},
+		DefaultOutputModes: []string{contentTypeJSON, "text/plain"},
 		Capabilities:       a2a.AgentCapabilities{Streaming: false},
 		Skills: []a2a.AgentSkill{
 			{
@@ -89,7 +94,7 @@ func Card(cfg Config) *a2a.AgentCard {
 				Name:        "Performance scorecard for one associate",
 				Description: "Read-only scorecard for one associate: task count, mean efficiency percent (null when no task was scorable), a per-task-type breakdown, a trend (IMPROVING, DECLINING, STABLE or INSUFFICIENT_DATA) and a coaching flag over their most recent tasks. The coaching flag is a visibility signal for a human, never a trigger to act autonomously. Answered as a 404 problem when no task performance is recorded for the associate.",
 				Tags:        []string{"labor", "performance", "associate", "read"},
-				InputModes:  []string{"application/json"},
+				InputModes:  []string{contentTypeJSON},
 				Examples: []string{
 					`{"skill":"associate_scorecard","arguments":{"associateId":"assoc-1"}}`,
 				},
@@ -99,7 +104,7 @@ func Card(cfg Config) *a2a.AgentCard {
 				Name:        "Performance status of a task type",
 				Description: "Read-only composed status of one task type (PICK, PACK or SLAM) across the whole floor: task count, mean efficiency percent and real measured mean duration (both null when nothing was measurable), the currently-active engineered labor standard (null when none is active, in which case efficiency cannot be scored) and idle-vs-busy utilization over a trailing window (windowSeconds, default 3600). utilizationPct is null when nothing was observed in the window; never treat null as 0%. Per-task-type utilization reports closed idle gaps only, so it can understate idleness by whatever gap is still open.",
 				Tags:        []string{"labor", "performance", "task-type", "standard", "utilization", "read"},
-				InputModes:  []string{"application/json"},
+				InputModes:  []string{contentTypeJSON},
 				Examples: []string{
 					`{"skill":"task_type_status","arguments":{"taskType":"PICK"}}`,
 					`{"skill":"task_type_status","arguments":{"taskType":"PACK","windowSeconds":7200}}`,
