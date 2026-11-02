@@ -380,15 +380,15 @@ func TestWireTextPartCarryingTheSkillJSON(t *testing.T) {
 // Unrecognised failures are answered as 500 problems that do not leak the
 // underlying error text.
 func TestProblemFromUseCaseUnknownErrorIs500AndOpaque(t *testing.T) {
-	p := problemFromUseCase(errTest("pq: connection refused to 10.0.0.7"))
+	p := problemFromUseCase(testError("pq: connection refused to 10.0.0.7"))
 	if p.Status != 500 || strings.Contains(p.Detail, "10.0.0.7") {
 		t.Fatalf("problem = %+v, want an opaque 500", p)
 	}
 }
 
-type errTest string
+type testError string
 
-func (e errTest) Error() string { return string(e) }
+func (e testError) Error() string { return string(e) }
 
 // The agent is read-only by construction: Deps carries no write use case.
 func TestDepsCarryReadUseCasesOnly(t *testing.T) {

@@ -1,6 +1,7 @@
 package performance_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -24,10 +25,10 @@ func TestNewWithHandling_CarriesUnitAndTeamLift(t *testing.T) {
 
 func TestNewWithHandling_KeepsInvariants(t *testing.T) {
 	at := time.Now()
-	if _, err := performance.NewWithHandling("", "t1", "", shared.Pick, shared.Case, false, 1, 1, at); err != performance.ErrEmptyEventId {
+	if _, err := performance.NewWithHandling("", "t1", "", shared.Pick, shared.Case, false, 1, 1, at); !errors.Is(err, performance.ErrEmptyEventId) {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := performance.NewWithHandling("e", "", "", shared.Pick, shared.Case, false, 1, 1, at); err != performance.ErrEmptyTaskId {
+	if _, err := performance.NewWithHandling("e", "", "", shared.Pick, shared.Case, false, 1, 1, at); !errors.Is(err, performance.ErrEmptyTaskId) {
 		t.Fatalf("err = %v", err)
 	}
 	p, _ := performance.NewWithHandling("e", "t", "", shared.Pick, shared.Case, false, 10, 0, at)
