@@ -151,3 +151,7 @@ analysis.
   [Reports API Reference](/docs/api-reference/rest-reports/labor-performance-reports-api)
   (generated from `apis/openapi-reports.yaml`),
   [MCP Governance Charter](../mcp/governance-charter.md).
+
+:::note[Disclaimer]
+This project is a domain-driven design study. It is not associated with, endorsed by or affiliated with any company, and it uses no company's code, data, logos or trademarks. All names, figures and examples are illustrative or synthetic.
+:::
