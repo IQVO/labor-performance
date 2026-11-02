@@ -263,6 +263,18 @@ func replayCachedResponse(w http.ResponseWriter, r *http.Request, pool *pgxpool.
 // no-null-status-code-ever-committed invariant documented on
 // RequireIdempotencyKey: nothing observable to another transaction
 // happens before the outcome is fully known and durably recorded.
+//
+// The handler runs behind a SAVEPOINT. A mapped domain conflict — a lost
+// race on a unique index (23505 -> 409), say — fails a statement on the
+// server and leaves the transaction ABORTED even though the handler answers
+// a truthful 4xx; recording that outcome would then hit 25P02 and the client
+// would see a 500. Releasing the savepoint exposes the abort: the release
+// fails, ROLLBACK TO SAVEPOINT discards only the handler's partial writes
+// (the key-row INSERT before the savepoint survives) and heals the
+// transaction, and the 4xx outcome is recorded and committed like any
+// other. A 2xx answer behind a failed release is a lie (its writes are
+// gone), so it rolls everything back and fails the request instead, and the
+// same key retries the real work.
 func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context, tx pgx.Tx, key string, next http.Handler) {
 	// A panic from the wrapped handler must roll back this transaction —
 	// so neither the idempotency row nor any domain write it made
@@ -280,22 +292,11 @@ func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context
 		}
 	}()
 
-	// The handler runs behind a SAVEPOINT. A mapped domain conflict — a
-	// statement that failed on the server (e.g. a unique violation the
-	// repository translated to a typed conflict) and was answered with a
-	// truthful 4xx — leaves the transaction ABORTED (SQLSTATE 25P02), so
-	// the outcome UPDATE below would fail and the client would get a 500
-	// for a request that was really a 4xx. Releasing the savepoint after
-	// the handler surfaces that aborted state here, where ROLLBACK TO
-	// SAVEPOINT can discard the handler's partial writes — the correct
-	// all-or-nothing semantics for an error answer — and return the
-	// transaction to health before the outcome is recorded.
 	if _, err := tx.Exec(ctx, "SAVEPOINT handler_run"); err != nil {
 		_ = tx.Rollback(ctx)
 		writeProblem(w, http.StatusInternalServerError, internalErrorProblem, err.Error(), r.URL.Path)
 		return
 	}
-
 	txCtx := pgtx.WithTx(ctx, tx)
 	rec := httptest.NewRecorder()
 	next.ServeHTTP(rec, r.WithContext(txCtx))
@@ -311,18 +312,17 @@ func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context
 
 	if _, err := tx.Exec(ctx, "RELEASE SAVEPOINT handler_run"); err != nil {
 		// A statement inside the handler failed on the server: the
-		// transaction is aborted. Rolling back to the savepoint discards
-		// the handler's partial writes and heals the transaction so the
-		// outcome can still be recorded and committed.
+		// transaction is aborted. Rolling back to the savepoint discards the
+		// handler's partial writes (all-or-nothing for an error answer) and
+		// returns the transaction to health.
 		if _, rerr := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT handler_run"); rerr != nil {
 			_ = tx.Rollback(ctx)
-			writeProblem(w, http.StatusInternalServerError, internalErrorProblem, rerr.Error(), r.URL.Path)
+			writeProblem(w, http.StatusInternalServerError, internalErrorProblem, err.Error(), r.URL.Path)
 			return
 		}
 		if rec.Code < http.StatusBadRequest {
-			// A success answer whose writes cannot be committed must
-			// neither be returned nor cached: fail the request so the
-			// same key retries the real work.
+			// A success whose writes cannot be committed must neither be
+			// returned nor cached: fail the request so the key retries.
 			_ = tx.Rollback(ctx)
 			writeProblem(w, http.StatusInternalServerError, internalErrorProblem, err.Error(), r.URL.Path)
 			return
