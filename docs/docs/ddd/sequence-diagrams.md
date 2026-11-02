@@ -32,14 +32,16 @@ sequenceDiagram
     Client->>MW: POST /standards with Idempotency-Key and body
     alt header missing
         MW-->>Client: 400 idempotency-key-required
+    else header not 1-128 printable ASCII
+        MW-->>Client: 400 idempotency-key-invalid
     end
     MW->>DB: BEGIN, INSERT idempotency_keys ON CONFLICT DO NOTHING
     alt key already stored
         MW->>DB: ROLLBACK, SELECT stored response
-        alt same request hash
-            MW-->>Client: replay stored status and body
-        else different body
-            MW-->>Client: 422 idempotency-key-reused
+        alt same method, path and body hash
+            MW-->>Client: replay stored status and body, Idempotency-Replayed true
+        else different method, path or body
+            MW-->>Client: 409 idempotency-key-reused
         end
     end
     MW->>H: request with tx in context

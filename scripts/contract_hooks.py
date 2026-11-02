@@ -4,7 +4,7 @@ The resource-creation POST of this service (POST /standards) sits behind the
 Idempotency-Key middleware (ADR 0016), which is enforced in every deployment
 now that Postgres is the only runtime (ADR 0034). The OpenAPI document gives
 the parameter no per-request value, so Schemathesis would send the SAME key
-with DIFFERENT bodies and rightly get 422 `idempotency-key-reused`. A real
+with DIFFERENT bodies and rightly get 409 `idempotency-key-reused`. A real
 client sends a fresh UUID per logical submit; this hook does the same for
 every request that carries the header. A request that deliberately omits the
 header (negative testing of the required parameter) is left alone and must

@@ -339,11 +339,14 @@ pushed over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT` (ADR 0008).
 ## API
 
 Six endpoints plus liveness and readiness probes. The full contract, including the RFC
-7807 error schema, is in [`apis/openapi.yaml`](apis/openapi.yaml).
+7807 error schema, is in [`apis/openapi.yaml`](apis/openapi.yaml). The API follows the
+fleet REST API guideline ([ADR 0037](docs/docs/adr/0037-adopt-fleet-rest-api-guideline.md)):
+noun routes, every `POST`/`PATCH` idempotent through `Idempotency-Key`, and a Spectral
+ruleset (`.spectral.yaml`) that enforces it in the `api-lint` job.
 
 | Method | Path | Use case |
 | --- | --- | --- |
-| `POST` | `/standards` | DefineStandard (optional `travelComponentSeconds`, ADR 0015). Requires an `Idempotency-Key` header — this is the service's one true resource-creation endpoint; see ADR 0016. |
+| `POST` | `/standards` | DefineStandard (optional `travelComponentSeconds`, ADR 0015). Requires an `Idempotency-Key` header (1-128 printable ASCII; missing is 400 `idempotency-key-required`, malformed is 400 `idempotency-key-invalid`); a replay answers with `Idempotency-Replayed: true`, the same key with another method, path or body is 409 `idempotency-key-reused`. See ADR 0016 and ADR 0037. |
 | `GET` | `/standards/{taskType}` | GetStandard |
 | `GET` | `/associates/{associateId}/scorecard` | GetAssociateScorecard |
 | `GET` | `/task-types/{taskType}/performance` | GetTaskTypePerformance |
@@ -415,9 +418,11 @@ curl -s -X POST localhost:8080/standards \
 # {"taskType":"PICK","expectedSeconds":45,"effectiveFrom":"2026-08-29T12:00:00Z"}
 ```
 
-Revising it closes the prior record and starts a new one (a fresh
-`Idempotency-Key` is required — reusing the one above would replay the
-first call's cached 201, not define a revision):
+Retrying the identical request with the same `Idempotency-Key` replays the
+first call's cached 201 (byte-identical, plus `Idempotency-Replayed: true`);
+the same key with a different body answers 409 `idempotency-key-reused`.
+Revising the standard closes the prior record and starts a new one, and needs
+a fresh `Idempotency-Key`:
 
 ```bash
 curl -s -X POST localhost:8080/standards \
@@ -680,6 +685,7 @@ and have since been added, bringing this service to full fleet parity with
 31. [0031 — Analytics consumer: atomic claim + apply, commit after success, retry transient failures](docs/docs/adr/0031-analytics-consumer-atomic-claim-and-retry.md)
 33. [0033 — MCP tool invocation and denial counters](docs/docs/adr/0033-mcp-invocation-and-denial-counters.md)
 36. [0036 — A2A inbound adapter (read-only)](docs/docs/adr/0036-a2a-inbound-adapter.md)
+37. [0037 — Adopt the fleet REST API guideline](docs/docs/adr/0037-adopt-fleet-rest-api-guideline.md)
 
 The same list, with statuses, is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
 

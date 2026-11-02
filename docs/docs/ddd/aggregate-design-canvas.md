@@ -69,8 +69,9 @@ Omitted: `Rehydrate` (a persistence round-trip, not a transition) and the
 - A conflicting revision (409) is not retried by the server; the caller
   re-reads with `GET /standards/{taskType}` and resubmits.
 - A repeated `POST /standards` with the same `Idempotency-Key` and body
-  replays the stored response instead of revising twice; the same key with
-  a different body is rejected with 422 (ADR 0016).
+  replays the stored response (with `Idempotency-Replayed: true`) instead of
+  revising twice; the same key with a different method, path or body is
+  rejected with 409 `idempotency-key-reused` (ADR 0016, ADR 0037).
 
 ### 6. Handled Commands
 

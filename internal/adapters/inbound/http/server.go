@@ -116,7 +116,7 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{statusKey: "ok"})
 }
 
 func (s *Server) handleDefineStandard(w http.ResponseWriter, r *http.Request) {
@@ -318,7 +318,7 @@ func toScorecardResponse(sc ports.Scorecard) scorecardResponse {
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dest any) bool {
 	if err := json.NewDecoder(r.Body).Decode(dest); err != nil {
-		writeProblem(w, http.StatusBadRequest, problemInfo{"malformed-request-body", "The request body is not valid JSON"}, err.Error(), r.URL.Path)
+		writeProblem(w, http.StatusBadRequest, problemInfo{problemMalformedRequestBody, "The request body is not valid JSON"}, err.Error(), r.URL.Path)
 		return false
 	}
 	return true
@@ -341,6 +341,10 @@ func writeProblem(w http.ResponseWriter, status int, info problemInfo, detail, i
 		Instance: instance,
 	})
 }
+
+// statusKey is the JSON key of the minimal {"status": "..."} body the
+// health and readiness endpoints answer with.
+const statusKey = "status"
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
