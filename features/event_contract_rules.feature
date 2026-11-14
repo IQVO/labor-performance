@@ -62,6 +62,14 @@ Feature: The event contract other contexts and the projector rely on
     And 0 integration "LaborStandardRevised" messages were encoded
 
   @bdd
+  Scenario: A revision's event carries the travel component of the new standard, not the closed one's
+    Given the clock is at "2026-10-01T09:00:00Z"
+    And a standard of 45 expected seconds and a travel component of 15 seconds is already defined for task type "PICK"
+    And the clock is at "2026-10-01T10:00:00Z"
+    When a standard of 40 expected seconds and a travel component of 10 seconds is defined for task type "PICK"
+    Then the analytics "LaborStandardRevised" message data field "travel_component_seconds" is 10
+
+  @bdd
   Scenario: A CASE standard's event carries its handling unit and its team-lift declaration
     When a standard of 30 expected seconds with a team lift above 18000 grams of 75 seconds is defined for task type "PICK" and handling unit "CASE"
     Then the analytics "LaborStandardDefined" message data field "handling_unit" is "CASE"

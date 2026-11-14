@@ -53,8 +53,23 @@ Feature: Utilization windows and the open gap at their boundaries
     And associate "A-1" completed a PICK task "T-2" in 60 seconds at "<completedAt>"
     When the fleet-wide utilization for task type "PICK" is requested
     Then the utilization response reports 60 task seconds, <idle> idle seconds and 0 open gap seconds
+    And the utilization response reports <associates> associates over a 3600 second window
+    When the utilization for associate "A-1" is requested
+    Then the utilization response reports 60 task seconds, <idle> idle seconds and <open> open gap seconds
 
     Examples: T-2 claims the next task at completedAt minus 60 seconds; the window opens at 09:00:00
-      | completedAt          | idle |
-      | 2026-10-01T09:00:59Z | 0    |
-      | 2026-10-01T09:01:00Z | 3600 |
+      | completedAt          | idle | associates | open |
+      | 2026-10-01T09:00:59Z | 0    | 0          | 3541 |
+      | 2026-10-01T09:01:00Z | 3600 | 1          | 3540 |
+
+  @bdd
+  Scenario Outline: Fleet-wide work is inside the window from the instant the window opens
+    Given the clock is at "2026-10-01T10:00:00Z"
+    And associate "A-1" completed a PICK task "T-1" in 60 seconds at "<completedAt>"
+    When the fleet-wide utilization for task type "PICK" is requested
+    Then the utilization response reports <task> task seconds, 0 idle seconds and 0 open gap seconds
+
+    Examples: the window is [09:00:00, 10:00:00]
+      | completedAt          | task |
+      | 2026-10-01T08:59:59Z | 0    |
+      | 2026-10-01T09:00:00Z | 60   |

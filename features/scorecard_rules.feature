@@ -54,3 +54,10 @@ Feature: Scorecard trend, coaching flag and per-task-type breakdown at their bou
     Then the scorecard reports 3 tasks and a mean efficiency of 100 percent
     And the scorecard breaks down "PICK" as 1 task with a mean efficiency of 100 percent
     And the scorecard breaks down "PACK" as 2 tasks with no mean efficiency
+
+  @bdd
+  Scenario: The empty associate id is no associate, even though station completions were recorded
+    Given a station with no checked-in associate completed a PICK task in 60 seconds
+    When the path "/associates//scorecard" is requested
+    Then the request is rejected with status 404
+    And the problem type is "associate-not-found"

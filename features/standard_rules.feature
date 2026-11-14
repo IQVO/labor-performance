@@ -157,13 +157,14 @@ Feature: Standard history, as-of scoring and the problem catalogue
     When a standard definition with the body '<body>' is sent
     Then the request is rejected with status 400
     And the problem type is "<slug>"
+    And the problem detail mentions "<detail>"
     And 0 "LaborStandardDefined" events were published
 
     Examples: raw and escaped U+0000 are refused; an escaped backslash followed by u0000 is only text
-      | body                                              | slug                   |
-      | {"taskType":"PI{NUL}CK","expectedSeconds":45}     | malformed-request-body |
-      | {"taskType":"PI\u0000CK","expectedSeconds":45}    | malformed-request-body |
-      | {"taskType":"PICK\\\\u0000","expectedSeconds":45} | unknown-task-type      |
+      | body                                                | slug                   | detail            |
+      | {"taskType":"PI{NUL}CK","expectedSeconds":45}       | malformed-request-body | NUL character     |
+      | {"taskType":"PI\u0000CK","expectedSeconds":45}      | malformed-request-body | NUL character     |
+      | {"taskType":"PICK\\\\u0000","expectedSeconds":45}  | unknown-task-type      | unknown task type |
 
   @bdd
   Scenario Outline: Every refused read names its cause in the problem type

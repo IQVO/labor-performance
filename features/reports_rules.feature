@@ -73,6 +73,20 @@ Feature: Labor Performance Report
     And the response path "totals.meanEfficiencyPct" is null
 
   @bdd
+  Scenario: Rows are ordered by hour and then by task type, and the breakdown is sorted by task type
+    Given associate "A-1" completed a PICK task "T-1" in 60 seconds at "2026-10-01T09:10:00Z"
+    And associate "A-1" completed a PACK task "T-2" in 60 seconds at "2026-10-01T09:20:00Z"
+    And associate "A-1" completed a SLAM task "T-3" in 60 seconds at "2026-10-01T08:50:00Z"
+    When the analytics projector consumes the published events
+    And the performance report is requested with query "from=2026-10-01T00:00:00Z&to=2026-10-02T00:00:00Z"
+    Then the response path "rows.0.taskType" is "SLAM"
+    And the response path "rows.1.taskType" is "PACK"
+    And the response path "rows.2.taskType" is "PICK"
+    And the response path "byTaskType.0.taskType" is "PACK"
+    And the response path "byTaskType.1.taskType" is "PICK"
+    And the response path "byTaskType.2.taskType" is "SLAM"
+
+  @bdd
   Scenario: The breakdown and the totals are weighted by volume, not a mean of hourly means
     Given the clock is at "2026-10-01T08:00:00Z"
     And a standard of 60 expected seconds is already defined for task type "PICK"
