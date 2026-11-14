@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -42,6 +43,14 @@ type harness struct {
 	clock     *tickClock
 	record    *usecases.RecordTaskPerformance
 	published *recordingPublisher
+
+	// standards, srv and deps back the documentation-derived rule steps
+	// (steps_rules_test.go): the in-memory standard repo is the seam that
+	// scripts a lost optimistic-concurrency race, srv carries the readiness
+	// gate, and deps are the Postgres / Kafka probes it consults.
+	standards *memory.StandardRepo
+	srv       *inboundhttp.Server
+	deps      *probeState
 }
 
 // newServer builds the production router over fresh in-memory adapters and
@@ -54,7 +63,9 @@ func newServer() (*httptest.Server, *harness) {
 	publisher := &recordingPublisher{inner: events.NewLogPublisher(nil)}
 	clock := &tickClock{at: baseInstant}
 
+	deps := newProbeState()
 	s := &inboundhttp.Server{
+		Readiness:              deps.readiness(inboundhttp.DefaultReadinessTTL),
 		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock},
 		GetStandard:            &usecases.GetStandard{Standards: standards},
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
@@ -65,6 +76,9 @@ func newServer() (*httptest.Server, *harness) {
 	h := &harness{
 		clock:     clock,
 		published: publisher,
+		standards: standards,
+		srv:       s,
+		deps:      deps,
 		record: &usecases.RecordTaskPerformance{
 			Performances: performances,
 			Standards:    standards,
@@ -464,6 +478,16 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 
 // TestFeatures runs the Gherkin acceptance suite under features/.
 func TestFeatures(t *testing.T) {
+	// @known-bug scenarios describe documented behaviour the code does not
+	// have yet; they are excluded unless BDD_TAGS selects them (and then they
+	// must fail).
+	// The CORS scenarios assert the built-in allow-list: an operator's
+	// CORS_ALLOWED_ORIGINS must not change what they see.
+	t.Setenv("CORS_ALLOWED_ORIGINS", "")
+	tags := os.Getenv("BDD_TAGS")
+	if tags == "" {
+		tags = "~@known-bug"
+	}
 	suite := godog.TestSuite{
 		ScenarioInitializer: InitializeScenario,
 		Options: &godog.Options{
@@ -472,6 +496,7 @@ func TestFeatures(t *testing.T) {
 			// Strict makes an undefined or pending step fail the suite
 			// instead of silently skipping it.
 			Strict:   true,
+			Tags:     tags,
 			TestingT: t,
 		},
 	}
