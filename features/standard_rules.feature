@@ -182,6 +182,7 @@ Feature: Standard history, as-of scoring and the problem catalogue
       | /task-types/UNLOAD/utilization       | 400    | unknown-task-type     |
       | /standards/PICK%00                   | 404    | resource-not-found    |
       | /associates/A%001/scorecard          | 404    | resource-not-found    |
+      | /associates//scorecard               | 404    | associate-not-found   |
 
   @bdd
   Scenario: Revising the task-type-only standard leaves a CASE standard open
@@ -213,3 +214,17 @@ Feature: Standard history, as-of scoring and the problem catalogue
     And associate "A-1" completed a PICK task "T-1" for handling unit "CASE" weighing 40000 grams in 60 seconds
     Then the "TaskPerformanceRecorded" event for task "T-1" carries handling unit "CASE" and team lift false
     And the efficiency recorded for task "T-1" is "50"
+
+  # KNOWN BUG (spec says one thing, code another). troubleshooting.md "Problem
+  # types" (warehouse-docs and docs/docs/operations/troubleshooting.md) lists
+  # `resource-not-found | 404 | NUL in the path (rejectNUL), unknown route`, and
+  # AGENTS.md promises RFC 7807 for every error response. chi's default handler
+  # answers an unknown route with the plain text "404 page not found"; only the
+  # NUL-in-path guard (nul.go) ever writes the problem. Excluded from the default
+  # run; BDD_TAGS=@known-bug runs it and it fails until a NotFound handler exists.
+  @bdd @known-bug
+  Scenario: A request for a route that does not exist is a resource-not-found problem
+    When the path "/no/such/route" is requested
+    Then the request is rejected with status 404
+    And the response is an RFC 7807 problem
+    And the problem type is "resource-not-found"

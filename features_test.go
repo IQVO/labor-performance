@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -477,6 +478,16 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 
 // TestFeatures runs the Gherkin acceptance suite under features/.
 func TestFeatures(t *testing.T) {
+	// @known-bug scenarios describe documented behaviour the code does not
+	// have yet; they are excluded unless BDD_TAGS selects them (and then they
+	// must fail).
+	// The CORS scenarios assert the built-in allow-list: an operator's
+	// CORS_ALLOWED_ORIGINS must not change what they see.
+	t.Setenv("CORS_ALLOWED_ORIGINS", "")
+	tags := os.Getenv("BDD_TAGS")
+	if tags == "" {
+		tags = "~@known-bug"
+	}
 	suite := godog.TestSuite{
 		ScenarioInitializer: InitializeScenario,
 		Options: &godog.Options{
@@ -485,6 +496,7 @@ func TestFeatures(t *testing.T) {
 			// Strict makes an undefined or pending step fail the suite
 			// instead of silently skipping it.
 			Strict:   true,
+			Tags:     tags,
 			TestingT: t,
 		},
 	}

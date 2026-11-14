@@ -16,8 +16,9 @@ package main_test
 //
 // Out of reach by design and therefore NOT pinned here: the Idempotency-Key
 // middleware (needs a pgx pool: integration tests), the transactional outbox
-// relay, the Kafka consumer's wire decoding and DLQ (internal/adapters/
-// inbound/kafka has its own BDD suite and integration tests).
+// relay, and the Kafka consumer's wire decoding and DLQ (unexported in
+// internal/adapters/inbound/kafka, which has its own unit and integration
+// tests).
 
 import (
 	"bytes"
@@ -91,6 +92,8 @@ type rules struct {
 	s       *wave2
 	wire    *wireState
 	reports *reportsState
+	// allowOrigin is the Access-Control-Allow-Origin of the last preflight.
+	allowOrigin string
 }
 
 func (r *rules) reset() {
@@ -248,6 +251,40 @@ func (r *rules) listHas(path string, count int) error {
 	}
 	if len(list) != count {
 		return fmt.Errorf("%q has %d items, want %d", path, len(list), count)
+	}
+	return nil
+}
+
+// --- CORS -------------------------------------------------------------------
+
+func (r *rules) preflight(origin, method, path, api string) error {
+	base := r.w.server.URL
+	if api == "reports" {
+		base = r.ensureReports().server.URL
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodOptions, base+path, http.NoBody)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Origin", origin)
+	req.Header.Set("Access-Control-Request-Method", method)
+	resp, err := r.w.server.Client().Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	r.allowOrigin = resp.Header.Get("Access-Control-Allow-Origin")
+	return nil
+}
+
+func (r *rules) preflightStep(origin, method, path, api string) error {
+	return r.preflight(origin, method, path, strings.ToLower(api))
+}
+
+func (r *rules) browserVerdict(origin, verdict string) error {
+	allowed := r.allowOrigin == origin
+	if allowed != (verdict == "allowed") {
+		return fmt.Errorf("preflight answered Access-Control-Allow-Origin %q for origin %q, want the call %s", r.allowOrigin, origin, verdict)
 	}
 	return nil
 }
@@ -462,6 +499,9 @@ func registerRules(sc *godog.ScenarioContext, w *world, s *wave2) {
 	sc.Step(`^the response list "([^"]*)" has (\d+) items?$`, r.listHas)
 	sc.Step(`^the path "([^"]*)" is requested$`, r.pathRequested)
 	sc.Step(`^a standard definition with the body '(.*)' is sent$`, r.definitionWithBody)
+
+	sc.Step(`^a browser preflight from origin "([^"]*)" asks to (GET|POST|PUT|DELETE) "([^"]*)" on the (OLTP|reports) API$`, r.preflightStep)
+	sc.Step(`^the browser is (allowed|refused) to call from origin "([^"]*)"$`, func(verdict, origin string) error { return r.browserVerdict(origin, verdict) })
 
 	sc.Step(`^the readiness probe is requested$`, func() error { return r.probe("/readyz") })
 	sc.Step(`^the liveness probe is requested$`, func() error { return r.probe("/healthz") })
