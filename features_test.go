@@ -42,6 +42,14 @@ type harness struct {
 	clock     *tickClock
 	record    *usecases.RecordTaskPerformance
 	published *recordingPublisher
+
+	// standards, srv and deps back the documentation-derived rule steps
+	// (steps_rules_test.go): the in-memory standard repo is the seam that
+	// scripts a lost optimistic-concurrency race, srv carries the readiness
+	// gate, and deps are the Postgres / Kafka probes it consults.
+	standards *memory.StandardRepo
+	srv       *inboundhttp.Server
+	deps      *probeState
 }
 
 // newServer builds the production router over fresh in-memory adapters and
@@ -54,7 +62,9 @@ func newServer() (*httptest.Server, *harness) {
 	publisher := &recordingPublisher{inner: events.NewLogPublisher(nil)}
 	clock := &tickClock{at: baseInstant}
 
+	deps := newProbeState()
 	s := &inboundhttp.Server{
+		Readiness:              deps.readiness(inboundhttp.DefaultReadinessTTL),
 		DefineStandard:         &usecases.DefineStandard{Standards: standards, Events: publisher, Clock: clock},
 		GetStandard:            &usecases.GetStandard{Standards: standards},
 		GetAssociateScorecard:  &usecases.GetAssociateScorecard{Performances: performances},
@@ -65,6 +75,9 @@ func newServer() (*httptest.Server, *harness) {
 	h := &harness{
 		clock:     clock,
 		published: publisher,
+		standards: standards,
+		srv:       s,
+		deps:      deps,
 		record: &usecases.RecordTaskPerformance{
 			Performances: performances,
 			Standards:    standards,
