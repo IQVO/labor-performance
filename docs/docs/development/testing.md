@@ -69,11 +69,12 @@ harness `repo_lint` rule R11 (coverage-scope) forbids a workflow passing
   `RecordTaskPerformance` directly.
 - **Features:** 19 files under `features/` hold **158**
   `Scenario`/`Scenario Outline` blocks (30 of them outlines; count with
-  `git grep -c -E "^[[:space:]]*Scenario" -- features`). One block is tagged
-  `@known-bug` and excluded by default (`BDD_TAGS` defaults to `~@known-bug`),
-  so `make bdd` runs 157 blocks as **248** executed scenarios and 1588 steps
-  (`248 scenarios (248 passed)`, `1588 steps (1588 passed)`, godog's own summary
-  from `go test . -run TestFeatures -count=1 -v`):
+  `git grep -c -E "^[[:space:]]*Scenario" -- features`). No block is tagged
+  `@known-bug` any more; the runner still excludes that tag by default
+  (`BDD_TAGS` defaults to `~@known-bug`) so a future known gap can be parked
+  there, and `make bdd` runs all 158 blocks as **249** executed scenarios and
+  1593 steps (`249 scenarios (249 passed)`, `1593 steps (1593 passed)`, godog's
+  own summary from `go test . -run TestFeatures -count=1 -v`):
 
 | File | Scenarios | Executed | Feature |
 | --- | --- | --- | --- |
@@ -86,7 +87,7 @@ harness `repo_lint` rule R11 (coverage-scope) forbids a workflow passing
 | `features/scorecard.feature` | 1 | 1 | Reading an associate's performance scorecard |
 | `features/scorecard_rules.feature` | 4 | 7 | Scorecard trend, coaching flag and per-task-type breakdown at their boundaries |
 | `features/scoring_rules.feature` | 8 | 16 | Scoring completions and deriving idle gaps: efficiency, unscorable task types, idle cap, dedupe on the event id |
-| `features/standard_rules.feature` | 16 | 40 | Standard history, as-of scoring and the problem catalogue (one `@known-bug` scenario, see below) |
+| `features/standard_rules.feature` | 16 | 41 | Standard history, as-of scoring and the problem catalogue, including the RFC 7807 `resource-not-found` for an unknown route |
 | `features/standards.feature` | 5 | 5 | Defining and reading engineered labor standards |
 | `features/standards_events_and_validation.feature` | 12 | 18 | Defining standards and the events that announce them |
 | `features/task_type_performance.feature` | 2 | 2 | Reading fleet-wide TaskType performance |
@@ -96,15 +97,17 @@ harness `repo_lint` rule R11 (coverage-scope) forbids a workflow passing
 | `features/utilization.feature` | 4 | 4 | Reading idle-gap utilization over a trailing window |
 | `features/utilization_data.feature` | 17 | 22 | Measuring utilization from recorded idle gaps |
 | `features/utilization_rules.feature` | 4 | 10 | Utilization windows and the open gap at their boundaries |
-| **19 files** | **158** | **248** | |
+| **19 files** | **158** | **249** | |
 
 The `*_rules.feature` files pin the rules written in the documentation; their
 steps are in `steps_rules_test.go`, `steps_reports_rules_test.go` and
-`steps_wire_rules_test.go`. The `@known-bug` scenario
-(`standard_rules.feature`, "A request for a route that does not exist is a
-resource-not-found problem") describes the documented RFC 7807 `404` for an
-unknown route; chi answers `text/plain`, so it fails by design under
-`BDD_TAGS=@known-bug go test . -run TestFeatures -count=1`.
+`steps_wire_rules_test.go`. The scenario "A request for a route that does not
+exist is a resource-not-found problem" (`standard_rules.feature`) pins the
+RFC 7807 `404` for an unknown route (and `internal/adapters/inbound/http/route_problems_test.go`
+pins it, plus the `405 method-not-allowed`, on both routers). It was a
+`@known-bug` until both routers got a chi `NotFound`/`MethodNotAllowed`
+handler; `BDD_TAGS=@known-bug go test . -run TestFeatures -count=1` now
+selects no scenario.
 
 A separate feature file,
 `internal/adapters/inbound/mcp/testdata/features/mcp_tools.feature`

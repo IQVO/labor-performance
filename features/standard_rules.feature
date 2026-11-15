@@ -216,14 +216,11 @@ Feature: Standard history, as-of scoring and the problem catalogue
     Then the "TaskPerformanceRecorded" event for task "T-1" carries handling unit "CASE" and team lift false
     And the efficiency recorded for task "T-1" is "50"
 
-  # KNOWN BUG (spec says one thing, code another). troubleshooting.md "Problem
-  # types" (warehouse-docs and docs/docs/operations/troubleshooting.md) lists
-  # `resource-not-found | 404 | NUL in the path (rejectNUL), unknown route`, and
-  # AGENTS.md promises RFC 7807 for every error response. chi's default handler
-  # answers an unknown route with the plain text "404 page not found"; only the
-  # NUL-in-path guard (nul.go) ever writes the problem. Excluded from the default
-  # run; BDD_TAGS=@known-bug runs it and it fails until a NotFound handler exists.
-  @bdd @known-bug
+  # An unknown route answers the same RFC 7807 problem as a NUL in the path
+  # (troubleshooting.md "Problem types": `resource-not-found | 404 | NUL in the
+  # path (rejectNUL), unknown route`); chi's text/plain default is replaced by
+  # the router's NotFound handler.
+  @bdd
   Scenario: A request for a route that does not exist is a resource-not-found problem
     When the path "/no/such/route" is requested
     Then the request is rejected with status 404
