@@ -28,30 +28,35 @@ func TestUnknownRouteAndWrongMethodAreProblems(t *testing.T) {
 			t.Run(router+"/"+tc.name, func(t *testing.T) {
 				rec := httptest.NewRecorder()
 				h.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, http.NoBody))
-				if rec.Code != tc.wantStatus {
-					t.Fatalf("status = %d, want %d", rec.Code, tc.wantStatus)
-				}
-				if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
-					t.Fatalf("Content-Type = %q, want application/problem+json", ct)
-				}
-				var p struct {
-					Type     string `json:"type"`
-					Status   int    `json:"status"`
-					Instance string `json:"instance"`
-				}
-				if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
-					t.Fatalf("body is not JSON: %v (%s)", err, rec.Body.String())
-				}
-				if want := problemBaseURI + tc.wantSlug; p.Type != want {
-					t.Errorf("type = %q, want %q", p.Type, want)
-				}
-				if p.Status != tc.wantStatus {
-					t.Errorf("problem.status = %d, want %d", p.Status, tc.wantStatus)
-				}
-				if p.Instance != tc.path {
-					t.Errorf("instance = %q, want %q", p.Instance, tc.path)
-				}
+				assertRouteProblem(t, rec, tc.wantStatus, tc.wantSlug, tc.path)
 			})
 		}
+	}
+}
+
+func assertRouteProblem(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantSlug, wantInstance string) {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status = %d, want %d", rec.Code, wantStatus)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("Content-Type = %q, want application/problem+json", ct)
+	}
+	var p struct {
+		Type     string `json:"type"`
+		Status   int    `json:"status"`
+		Instance string `json:"instance"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatalf("body is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if want := problemBaseURI + wantSlug; p.Type != want {
+		t.Errorf("type = %q, want %q", p.Type, want)
+	}
+	if p.Status != wantStatus {
+		t.Errorf("problem.status = %d, want %d", p.Status, wantStatus)
+	}
+	if p.Instance != wantInstance {
+		t.Errorf("instance = %q, want %q", p.Instance, wantInstance)
 	}
 }
