@@ -85,7 +85,7 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 	// An unknown route or a wrong method is an RFC 7807 problem, not chi's
 	// text/plain default.
 	r.NotFound(handleRouteNotFound)
-	r.MethodNotAllowed(handleMethodNotAllowed)
+	r.MethodNotAllowed(methodNotAllowedFor(r))
 
 	// /healthz stays outside any route group; it never needed a
 	// credential and still doesn't now that REST auth is gone.
