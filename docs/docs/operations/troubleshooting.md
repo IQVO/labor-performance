@@ -102,7 +102,8 @@ MCP calls, so nothing can trip one.
 | `idempotency-key-required` | 400 | `RequireIdempotencyKey` |
 | `idempotency-key-invalid` | 400 | `RequireIdempotencyKey` |
 | `dependency-unavailable` | 503 | `/readyz` (Postgres or Kafka check failed) |
-| `resource-not-found` | 404 | NUL in the path (`rejectNUL`), unknown route |
+| `resource-not-found` | 404 | NUL in the path (`rejectNUL`), unknown route (the router's `NotFound` handler, on both the OLTP and the reports router) |
+| `method-not-allowed` | 405 | A known path called with a method it does not serve (the router's `MethodNotAllowed` handler) |
 | `idempotency-key-reused` | 409 | `RequireIdempotencyKey` |
 | `invalid-report-query` | 400 | Reports API |
 | `report-store-error` | 500 | Reports API |

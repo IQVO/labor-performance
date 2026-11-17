@@ -82,6 +82,10 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 	// Postgres 22021 -> 500 (ADR 0034); it runs before the route-scoped
 	// idempotency middleware so a rejected request never records its key.
 	r.Use(rejectNUL)
+	// An unknown route or a wrong method is an RFC 7807 problem, not chi's
+	// text/plain default.
+	r.NotFound(handleRouteNotFound)
+	r.MethodNotAllowed(methodNotAllowedFor(r))
 
 	// /healthz stays outside any route group; it never needed a
 	// credential and still doesn't now that REST auth is gone.
