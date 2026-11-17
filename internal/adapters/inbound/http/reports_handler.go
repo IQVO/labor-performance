@@ -253,6 +253,8 @@ func NewReportsRouter(h *ReportsHandlers, logger *slog.Logger, serviceName strin
 	r.Use(RequestLogger(logger))
 	r.Use(middleware.Recoverer)
 	r.Use(readOnlyCORSMiddleware())
+	r.NotFound(handleRouteNotFound)
+	r.MethodNotAllowed(methodNotAllowedFor(r))
 
 	r.Get("/healthz", h.GetReportsHealthz)
 
