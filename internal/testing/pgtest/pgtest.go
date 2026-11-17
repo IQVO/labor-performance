@@ -137,6 +137,30 @@ func URL(t *testing.T) string {
 	return dsn
 }
 
+// EmptyURL returns the DSN of a FRESH, EMPTY database (no migrations
+// applied) on the shared container, created without the migrated template.
+// For binaries that OWN their schema and must be proven to migrate an empty
+// database themselves (e.g. cmd/labor-projector, the sole writer of the
+// analytical schema, ADR-0007) — the boot under test has to create every
+// table it later writes to, or the test fails.
+func EmptyURL(t *testing.T) string {
+	t.Helper()
+	once.Do(start)
+	if errStart != nil {
+		t.Fatalf("start postgres container: %v", errStart)
+	}
+	ctx := context.Background()
+	name := fmt.Sprintf("t_empty_%d", seq.Add(1))
+	if err := adminExec(ctx, `CREATE DATABASE `+name); err != nil {
+		t.Fatalf("create empty database %s: %v", name, err)
+	}
+	dsn, err := databaseURL(ctx, name)
+	if err != nil {
+		t.Fatalf("database url: %v", err)
+	}
+	return dsn
+}
+
 // Shutdown terminates the shared container; call it from TestMain.
 func Shutdown() {
 	if container != nil {
