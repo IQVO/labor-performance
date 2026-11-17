@@ -22,7 +22,7 @@ import (
 func rejectNUL(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.ContainsRune(r.URL.Path, 0) || strings.ContainsRune(r.URL.RawPath, 0) || strings.Contains(r.URL.RawPath, "%00") {
-			writeProblem(w, http.StatusNotFound, problemInfo{"resource-not-found", "Resource not found"}, "no resource matches the requested path", r.URL.Path)
+			writeProblem(w, http.StatusNotFound, problemResourceNotFound, "no resource matches the requested path", r.URL.Path)
 			return
 		}
 		if r.Body != nil && r.Body != http.NoBody {
