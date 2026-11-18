@@ -92,6 +92,8 @@ func TestStandardEvents_IntegrationDataIsTheAnalyticsDataByteForByte(t *testing.
 		shared.NewLaborStandardDefined(at(9), "std-9", shared.Pick, 30, nil, at(8)).WithHandling(shared.Case, &thr, &secs),
 		shared.NewLaborStandardRevised(at(10), "std-2", shared.Pack, 45, 40, nil, at(10)),
 		shared.NewLaborStandardRevised(at(10), "std-10", shared.Pick, 95, 90, &travel, at(10)).WithHandling(shared.Pallet, nil, nil),
+		shared.NewLaborStandardDefined(at(9), "std-11", shared.Pick, 40, nil, at(8)).WithSite("SITE-GRU-01"),
+		shared.NewLaborStandardRevised(at(10), "std-12", shared.Pick, 30, 28, nil, at(10)).WithHandling(shared.Case, &thr, &secs).WithSite("SITE-GRU-01"),
 	}
 	analytics := &AnalyticsPublisher{NewID: fixedID}
 	integration := &IntegrationPublisher{NewID: fixedID}
