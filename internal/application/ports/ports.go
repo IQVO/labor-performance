@@ -25,23 +25,31 @@ type StandardRepo interface {
 	Save(ctx context.Context, s *standard.LaborStandard) error
 	// FindActiveAsOf returns the LaborStandard for taskType whose
 	// effective range covers t ([EffectiveFrom, EffectiveTo)), or
-	// (nil, nil) if none does. It considers ONLY task-type-only
-	// standards (handling unit ""): a standard declared for a handling
-	// unit is never returned here, which is what keeps the pre-ADR-0035
-	// behaviour byte-for-byte when no handling unit is involved.
+	// (nil, nil) if none does. It considers ONLY task-type-only,
+	// site-less standards (handling unit "", site code ""): a standard
+	// declared for a handling unit or a site is never returned here,
+	// which is what keeps the pre-ADR-0035/0038 behaviour byte-for-byte
+	// when no handling unit is involved. Scoring uses it (ADR 0038
+	// decision 3: scoring never resolves a site standard).
 	FindActiveAsOf(ctx context.Context, taskType shared.TaskType, t time.Time) (*standard.LaborStandard, error)
-	// FindCurrentlyActive returns the task-type-only LaborStandard for
-	// taskType that is active right now (EffectiveTo nil), or (nil, nil)
-	// if none is.
+	// FindCurrentlyActive returns the task-type-only, site-less
+	// LaborStandard for taskType that is active right now (EffectiveTo
+	// nil), or (nil, nil) if none is.
 	FindCurrentlyActive(ctx context.Context, taskType shared.TaskType) (*standard.LaborStandard, error)
-	// FindActiveAsOfForUnit is FindActiveAsOf for the standard declared
-	// for exactly (taskType, unit). unit "" is FindActiveAsOf. It never
-	// falls back to a less specific standard: the "most specific wins"
-	// resolution is the caller's decision (ADR 0035).
+	// FindActiveAsOfForUnit is FindActiveAsOf for the site-less standard
+	// declared for exactly (taskType, unit). unit "" is FindActiveAsOf. It
+	// never falls back to a less specific standard: the "most specific
+	// wins" resolution is the caller's decision (ADR 0035).
 	FindActiveAsOfForUnit(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit, t time.Time) (*standard.LaborStandard, error)
 	// FindCurrentlyActiveForUnit is FindCurrentlyActive for exactly
-	// (taskType, unit). unit "" is FindCurrentlyActive.
+	// (taskType, unit), site-less. unit "" is FindCurrentlyActive.
 	FindCurrentlyActiveForUnit(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit) (*standard.LaborStandard, error)
+	// FindCurrentlyActiveForScope is FindCurrentlyActive for exactly one
+	// Scope (task type, handling unit, site code; ADR 0038). It never falls
+	// back to another scope: a site's lookup never answers with the
+	// site-less standard, nor the reverse. A Scope with no site code is
+	// FindCurrentlyActiveForUnit.
+	FindCurrentlyActiveForScope(ctx context.Context, scope standard.Scope) (*standard.LaborStandard, error)
 	NextID(ctx context.Context) (shared.StandardId, error)
 }
 

@@ -48,16 +48,23 @@ func (r *StandardRepo) FindActiveAsOf(ctx context.Context, taskType shared.TaskT
 	return r.FindActiveAsOfForUnit(ctx, taskType, "", t)
 }
 
+// FindActiveAsOfForUnit resolves the SITE-LESS standard of (taskType,
+// unit) active at t: a site's standard is never returned (ADR 0038).
 func (r *StandardRepo) FindActiveAsOfForUnit(_ context.Context, taskType shared.TaskType, unit shared.HandlingUnit, t time.Time) (*standard.LaborStandard, error) {
+	return r.findActiveAt(standard.Scope{TaskType: taskType, HandlingUnit: unit}, t), nil
+}
+
+// findActiveAt returns a copy of the standard of exactly scope active at t.
+func (r *StandardRepo) findActiveAt(scope standard.Scope, t time.Time) *standard.LaborStandard {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, s := range r.standards {
-		if s.TaskType() == taskType && s.HandlingUnit() == unit && s.IsActiveAt(t) {
+		if s.Scope() == scope && s.IsActiveAt(t) {
 			cp := *s
-			return &cp, nil
+			return &cp
 		}
 	}
-	return nil, nil
+	return nil
 }
 
 func (r *StandardRepo) FindCurrentlyActive(ctx context.Context, taskType shared.TaskType) (*standard.LaborStandard, error) {
@@ -66,6 +73,12 @@ func (r *StandardRepo) FindCurrentlyActive(ctx context.Context, taskType shared.
 
 func (r *StandardRepo) FindCurrentlyActiveForUnit(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit) (*standard.LaborStandard, error) {
 	return r.FindActiveAsOfForUnit(ctx, taskType, unit, time.Now())
+}
+
+// FindCurrentlyActiveForScope resolves the standard of exactly scope (task
+// type, handling unit, site code) active now; no fallback to another scope.
+func (r *StandardRepo) FindCurrentlyActiveForScope(_ context.Context, scope standard.Scope) (*standard.LaborStandard, error) {
+	return r.findActiveAt(scope, time.Now()), nil
 }
 
 func (r *StandardRepo) NextID(_ context.Context) (shared.StandardId, error) {

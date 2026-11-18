@@ -3,7 +3,11 @@
 // and TaskPerformance.
 package shared
 
-import "errors"
+import (
+	"errors"
+	"unicode"
+	"unicode/utf8"
+)
 
 // TaskType is the task type an engineered labor standard applies to, and
 // (when known) the type a scored TaskPerformance belongs to. It mirrors
@@ -122,4 +126,35 @@ func ParseHandlingUnitLenient(raw string) HandlingUnit {
 	default:
 		return ""
 	}
+}
+
+// SiteCode scopes a LaborStandard to one facility (a facility-layout site
+// code, ADR 0038). The zero value ("") is the site-less standard: it
+// applies to every site, and it is the only state that existed before ADR
+// 0038. It is declarative input on a standard: this context never resolves
+// or validates it against a sibling (AGENTS.md non-negotiable 1).
+type SiteCode string
+
+// MaxSiteCodeLength is the longest site code accepted, in characters.
+const MaxSiteCodeLength = 32
+
+// ErrInvalidSiteCode is returned when a caller-supplied (REST) site code is
+// longer than MaxSiteCodeLength characters or contains whitespace.
+var ErrInvalidSiteCode = errors.New("invalid site code: must be 1-32 characters with no whitespace, or absent for every site")
+
+// NewSiteCode validates a caller-supplied site code. The empty string is
+// valid and means "every site" (the site-less standard); any other value
+// must be 1 to MaxSiteCodeLength characters (Unicode code points, not
+// bytes) with no whitespace anywhere. Nothing else is assumed about its
+// shape: the code is whatever the facility declares.
+func NewSiteCode(value string) (SiteCode, error) {
+	if utf8.RuneCountInString(value) > MaxSiteCodeLength || !utf8.ValidString(value) {
+		return "", ErrInvalidSiteCode
+	}
+	for _, r := range value {
+		if unicode.IsSpace(r) {
+			return "", ErrInvalidSiteCode
+		}
+	}
+	return SiteCode(value), nil
 }

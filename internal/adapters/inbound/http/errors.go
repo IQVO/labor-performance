@@ -24,6 +24,7 @@ func statusFor(err error) int {
 
 	case errors.Is(err, shared.ErrUnknownTaskType),
 		errors.Is(err, shared.ErrUnknownHandlingUnit),
+		errors.Is(err, shared.ErrInvalidSiteCode),
 		errors.Is(err, performance.ErrEmptyEventId),
 		errors.Is(err, performance.ErrEmptyTaskId):
 		return http.StatusBadRequest
@@ -72,6 +73,7 @@ var problemTable = []struct {
 	{ports.ErrOpenStandardConflict, problemInfo{"standard-conflict", "Another standard is already open for this task type"}},
 	{shared.ErrUnknownTaskType, problemInfo{"unknown-task-type", "Task type must be PICK, PACK, or SLAM"}},
 	{shared.ErrUnknownHandlingUnit, problemInfo{"unknown-handling-unit", "Handling unit must be EACH, CASE, or PALLET"}},
+	{shared.ErrInvalidSiteCode, problemInfo{"invalid-site-code", "Site code must be 1-32 characters with no whitespace"}},
 	{performance.ErrEmptyEventId, problemInfo{"empty-event-id", "Kafka event id must not be empty"}},
 	{performance.ErrEmptyTaskId, problemInfo{"empty-task-id", "Task id must not be empty"}},
 	{standard.ErrNonPositiveExpectedSeconds, problemInfo{"non-positive-expected-seconds", "Expected seconds must be greater than zero"}},

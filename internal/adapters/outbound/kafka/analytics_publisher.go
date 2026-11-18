@@ -203,6 +203,7 @@ func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, 
 			fields["travel_component_seconds"] = *ev.TravelComponentSeconds
 		}
 		addStandardHandling(fields, ev.HandlingUnit, ev.TeamLiftThresholdG, ev.TeamLiftExpectedSeconds)
+		addStandardSite(fields, ev.SiteCode)
 		return cloudevents.EventLaborStandardDefined, cloudevents.EntityStandard, string(ev.TaskType), string(ev.StandardId), fields, true
 
 	case shared.LaborStandardRevised:
@@ -217,6 +218,7 @@ func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, 
 			fields["travel_component_seconds"] = *ev.NewTravelComponentSeconds
 		}
 		addStandardHandling(fields, ev.HandlingUnit, ev.TeamLiftThresholdG, ev.TeamLiftExpectedSeconds)
+		addStandardSite(fields, ev.SiteCode)
 		return cloudevents.EventLaborStandardRevised, cloudevents.EntityStandard, string(ev.TaskType), string(ev.StandardId), fields, true
 
 	case shared.TaskPerformanceRecorded:

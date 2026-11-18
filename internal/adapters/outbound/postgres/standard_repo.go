@@ -15,11 +15,17 @@ import (
 )
 
 // oneOpenStandardIndex is the partial unique index (migration 0006,
-// widened to (task_type, handling_unit) by migration 0007) that
-// enforces "at most one open (effective_to IS NULL) standard per
-// (task_type, handling_unit)" at the database level. A 23505 violation naming it is mapped
+// widened to (task_type, handling_unit) by migration 0007 and to
+// (task_type, handling_unit, site_code) by migration 0008) that enforces
+// "at most one open (effective_to IS NULL) standard per scope" at the
+// database level. A 23505 violation naming it is mapped
 // to ports.ErrOpenStandardConflict.
 const oneOpenStandardIndex = "idx_labor_standards_one_open_per_task_type"
+
+// standardColumns is the column list every standard read selects, in the
+// order scanStandard scans it.
+const standardColumns = `id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version,
+		       handling_unit, team_lift_threshold_g, team_lift_expected_seconds, site_code`
 
 // StandardRepo is a pgxpool-backed implementation of ports.StandardRepo.
 type StandardRepo struct {
@@ -47,14 +53,14 @@ func NewStandardRepo(pool *pgxpool.Pool) *StandardRepo {
 // either.
 func (r *StandardRepo) Save(ctx context.Context, s *standard.LaborStandard) error {
 	tag, err := execGuarded(ctx, r.pool, `
-		INSERT INTO labor_standards (id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version, handling_unit, team_lift_threshold_g, team_lift_expected_seconds)
-		VALUES ($1, $2, $3, $4, $5, $6, 1, $8, $9, $10)
+		INSERT INTO labor_standards (id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version, handling_unit, team_lift_threshold_g, team_lift_expected_seconds, site_code)
+		VALUES ($1, $2, $3, $4, $5, $6, 1, $8, $9, $10, $11)
 		ON CONFLICT (id) DO UPDATE
 		  SET effective_to = EXCLUDED.effective_to,
 		      version = labor_standards.version + 1
 		WHERE labor_standards.version = $7
 	`, string(s.ID()), string(s.TaskType()), s.ExpectedSeconds(), s.TravelComponentSeconds(), s.EffectiveFrom(), s.EffectiveTo(), s.Version(),
-		string(s.HandlingUnit()), teamLiftThreshold(s), teamLiftSeconds(s))
+		string(s.HandlingUnit()), teamLiftThreshold(s), teamLiftSeconds(s), string(s.SiteCode()))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == oneOpenStandardIndex {
@@ -116,36 +122,47 @@ func teamLiftSeconds(s *standard.LaborStandard) *int64 {
 	return nil
 }
 
-// FindActiveAsOf resolves the task-type-only standard (handling_unit = ”).
+// FindActiveAsOf resolves the task-type-only, site-less standard
+// (handling_unit = ”, site_code = ”).
 func (r *StandardRepo) FindActiveAsOf(ctx context.Context, taskType shared.TaskType, t time.Time) (*standard.LaborStandard, error) {
 	return r.FindActiveAsOfForUnit(ctx, taskType, "", t)
 }
 
+// FindActiveAsOfForUnit resolves the SITE-LESS standard of (taskType, unit)
+// active at t. A site's standard is never returned: scoring, the only
+// caller, stays on the site-less standards (ADR 0038 decision 3).
 func (r *StandardRepo) FindActiveAsOfForUnit(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit, t time.Time) (*standard.LaborStandard, error) {
 	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
-		SELECT id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version,
-		       handling_unit, team_lift_threshold_g, team_lift_expected_seconds
+		SELECT `+standardColumns+`
 		FROM labor_standards
 		WHERE task_type = $1
 		  AND handling_unit = $3
+		  AND site_code = ''
 		  AND effective_from <= $2
 		  AND (effective_to IS NULL OR effective_to > $2)
 	`, string(taskType), t, string(unit))
 	return scanStandard(row)
 }
 
-// FindCurrentlyActive resolves the task-type-only open standard.
+// FindCurrentlyActive resolves the task-type-only, site-less open standard.
 func (r *StandardRepo) FindCurrentlyActive(ctx context.Context, taskType shared.TaskType) (*standard.LaborStandard, error) {
 	return r.FindCurrentlyActiveForUnit(ctx, taskType, "")
 }
 
+// FindCurrentlyActiveForUnit resolves the site-less open standard of
+// exactly (taskType, unit).
 func (r *StandardRepo) FindCurrentlyActiveForUnit(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit) (*standard.LaborStandard, error) {
+	return r.FindCurrentlyActiveForScope(ctx, standard.Scope{TaskType: taskType, HandlingUnit: unit})
+}
+
+// FindCurrentlyActiveForScope resolves the open standard of exactly scope
+// (task type, handling unit, site code); no fallback to another scope.
+func (r *StandardRepo) FindCurrentlyActiveForScope(ctx context.Context, scope standard.Scope) (*standard.LaborStandard, error) {
 	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
-		SELECT id, task_type, expected_seconds, travel_component_seconds, effective_from, effective_to, version,
-		       handling_unit, team_lift_threshold_g, team_lift_expected_seconds
+		SELECT `+standardColumns+`
 		FROM labor_standards
-		WHERE task_type = $1 AND handling_unit = $2 AND effective_to IS NULL
-	`, string(taskType), string(unit))
+		WHERE task_type = $1 AND handling_unit = $2 AND site_code = $3 AND effective_to IS NULL
+	`, string(scope.TaskType), string(scope.HandlingUnit), string(scope.SiteCode))
 	return scanStandard(row)
 }
 
@@ -161,9 +178,10 @@ func scanStandard(row pgx.Row) (*standard.LaborStandard, error) {
 		handlingUnit           string
 		thresholdG             *int64
 		teamLiftSeconds        *int64
+		siteCode               string
 	)
 	err := row.Scan(&id, &taskType, &expectedSeconds, &travelComponentSeconds, &effectiveFrom, &effectiveTo, &version,
-		&handlingUnit, &thresholdG, &teamLiftSeconds)
+		&handlingUnit, &thresholdG, &teamLiftSeconds, &siteCode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -180,7 +198,8 @@ func scanStandard(row pgx.Row) (*standard.LaborStandard, error) {
 		}
 		teamLift = &tl
 	}
-	return standard.RehydrateForUnit(shared.StandardId(id), shared.TaskType(taskType), shared.HandlingUnit(handlingUnit), expectedSeconds, travelComponentSeconds, teamLift, effectiveFrom, effectiveTo, version), nil
+	scope := standard.Scope{TaskType: shared.TaskType(taskType), HandlingUnit: shared.HandlingUnit(handlingUnit), SiteCode: shared.SiteCode(siteCode)}
+	return standard.RehydrateForScope(shared.StandardId(id), scope, expectedSeconds, travelComponentSeconds, teamLift, effectiveFrom, effectiveTo, version), nil
 }
 
 // NextID mints a standard id.
