@@ -114,14 +114,57 @@ func TestIntegrationPublisherPreservesNilEfficiency(t *testing.T) {
 func TestIntegrationPublisherSkipsEventsOutsideTheContract(t *testing.T) {
 	p, w := newTestIntegrationPublisher()
 
-	// LaborStandardDefined is analytics-only, NOT part of the
-	// integration contract (ADR 0013 scopes the first cut to
-	// TaskPerformanceRecorded only).
-	if err := p.Publish(context.Background(), shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9))); err != nil {
+	// An event type the integration contract does not name is skipped,
+	// never an error, so the caller can hand over the full event stream.
+	if err := p.Publish(context.Background(), unknownEvent{}); err != nil {
 		t.Fatalf("an event outside the integration contract must be skipped, not an error: %v", err)
 	}
 	if len(w.msgs) != 0 {
 		t.Errorf("got %d messages, want 0", len(w.msgs))
+	}
+}
+
+// ADR 0038: the standard events are part of the integration contract,
+// keyed by task type, subject the standard id, events-stream dataschema.
+func TestIntegrationPublisherPublishesTheStandardEvents(t *testing.T) {
+	cases := []struct {
+		event      shared.DomainEvent
+		wantType   string
+		wantSchema string
+		wantKey    string
+		wantSubj   string
+	}{
+		{shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9)), cloudevents.TypeLaborStandardDefined,
+			"urn:warehouse:labor-performance:events:LaborStandardDefined:v1", "PICK", "std-1"},
+		{shared.NewLaborStandardRevised(at(10), "std-2", shared.Pack, 45, 40, nil, at(10)), cloudevents.TypeLaborStandardRevised,
+			"urn:warehouse:labor-performance:events:LaborStandardRevised:v1", "PACK", "std-2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.wantType, func(t *testing.T) {
+			p, w := newTestIntegrationPublisher()
+			if err := p.Publish(context.Background(), tc.event); err != nil {
+				t.Fatalf("Publish: %v", err)
+			}
+			if len(w.msgs) != 1 {
+				t.Fatalf("got %d messages, want 1", len(w.msgs))
+			}
+			env, _ := decodePlain(t, w.msgs[0].Value)
+			if env.Type() != tc.wantType || env.DataSchema() != tc.wantSchema {
+				t.Errorf("type %q schema %q, want %q %q", env.Type(), env.DataSchema(), tc.wantType, tc.wantSchema)
+			}
+			if got := string(w.msgs[0].Key); got != tc.wantKey {
+				t.Errorf("partition key = %q, want the task type %q", got, tc.wantKey)
+			}
+			if env.Subject() != tc.wantSubj {
+				t.Errorf("subject = %q, want the standard id %q", env.Subject(), tc.wantSubj)
+			}
+			assertContentTypeHeader(t, w.msgs[0].Headers)
+
+			msgs, err := p.Encode(context.Background(), tc.event)
+			if err != nil || len(msgs) != 1 || msgs[0].Topic != cloudevents.TopicLaborPerformanceEvents || msgs[0].EventType != tc.wantType {
+				t.Fatalf("Encode = %+v, %v; want one %s message on the integration topic", msgs, err, tc.wantType)
+			}
+		})
 	}
 }
 

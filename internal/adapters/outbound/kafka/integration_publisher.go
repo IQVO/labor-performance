@@ -13,18 +13,23 @@ import (
 	"github.com/claudioed/labor-performance/internal/domain/shared"
 )
 
-// IntegrationPublisher publishes this service's TaskPerformanceRecorded
-// domain event onto cloudevents.TopicLaborPerformanceEvents — the
-// integration topic added by ADR 0013 — as a CloudEvents 1.0 event in
-// structured content mode (ADR 0021), type
-// cloudevents.TypeTaskPerformanceRecorded and dataschema
-// urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1.
+// IntegrationPublisher publishes this service's domain events onto
+// cloudevents.TopicLaborPerformanceEvents — the integration topic added by
+// ADR 0013 — as CloudEvents 1.0 events in structured content mode (ADR
+// 0021), dataschema urn:warehouse:labor-performance:events:<EventName>:v1.
 //
-// Only TaskPerformanceRecorded is part of the integration contract today.
-// LaborStandardDefined/LaborStandardRevised stay analytics-only — a
-// consumer needing them can be added to this publisher's marshalData in
-// a later, additive change; ADR 0013 explains why the first cut is
-// scoped to TaskPerformanceRecorded.
+// The integration contract carries three types:
+//   - TaskPerformanceRecorded (ADR 0013, consumed by workforce-management),
+//     keyed by AssociateId;
+//   - LaborStandardDefined and LaborStandardRevised (ADR 0038, the additive
+//     widening ADR 0013 anticipated; consumed by warehouse-planning, which
+//     keeps a local copy of the standards). Their `data` is built by the
+//     SAME builder as the analytics copy (marshalData), so the two copies
+//     can never drift apart; they are keyed by TaskType (every revision of
+//     one task type stays in order) and their subject is the StandardId.
+//
+// The analytics copy of every event is unchanged; this publisher only adds
+// one more outbox row per event.
 //
 // It satisfies ports.EventPublisher, so the composition root can hand it
 // the same event stream the log and analytics publishers get, and it
@@ -47,8 +52,10 @@ type IntegrationPublisher struct {
 // just because a message carries one — the Balancer alone decides
 // partition placement, and LeastBytes routes purely by cumulative byte
 // volume, ignoring Key entirely. This publisher has always set Key to
-// the event's AssociateId (see integrationData), but that only achieves
-// per-associate partition affinity, and therefore in-order delivery to a
+// the event's AssociateId for TaskPerformanceRecorded (and, since ADR
+// 0038, to the TaskType for the standard events; see integrationData),
+// but that only achieves per-key partition affinity, and therefore
+// in-order delivery to a
 // single-partition consumer, when the Balancer is itself key-aware. See
 // ADR 0018, order-management PR #111, and warehouse-infra PR #42 (the
 // 1->8 partition scaleup that exposed this).
@@ -67,9 +74,9 @@ func NewIntegrationPublisher(brokers []string, newID func() string) *Integration
 	}
 }
 
-// Publish emits every TaskPerformanceRecorded event onto the integration
-// topic. Any other event type is skipped rather than erroring, so the
-// caller can hand it the full event stream indiscriminately.
+// Publish emits every event of the integration contract onto the
+// integration topic. Any other event type is skipped rather than erroring,
+// so the caller can hand it the full event stream indiscriminately.
 func (p *IntegrationPublisher) Publish(ctx context.Context, events ...shared.DomainEvent) error {
 	for _, event := range events {
 		msgs, err := p.Encode(ctx, event)
@@ -85,7 +92,7 @@ func (p *IntegrationPublisher) Publish(ctx context.Context, events ...shared.Dom
 	return nil
 }
 
-// Encode maps every TaskPerformanceRecorded event to its integration
+// Encode maps every event of the integration contract to its integration
 // message — CloudEvent, partition key, the CloudEvents content-type
 // header and the W3C trace headers of the span active in ctx — without
 // writing anything. Every other event type
@@ -96,14 +103,14 @@ func (p *IntegrationPublisher) Publish(ctx context.Context, events ...shared.Dom
 func (p *IntegrationPublisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([]Encoded, error) {
 	out := make([]Encoded, 0, len(events))
 	for _, event := range events {
-		eventType, key, subject, data, ok := integrationData(event)
+		eventType, entity, key, subject, data, ok := integrationData(event)
 		if !ok {
 			continue
 		}
 
 		payload, err := cloudevents.New(cloudevents.Spec{
 			ID:        p.newID(),
-			Entity:    cloudevents.EntityPerformance,
+			Entity:    entity,
 			EventName: eventType,
 			Subject:   subject,
 			Time:      event.OccurredAt(),
@@ -118,7 +125,7 @@ func (p *IntegrationPublisher) Encode(ctx context.Context, events ...shared.Doma
 		otelkafka.Inject(ctx, &headers)
 		out = append(out, Encoded{
 			Topic:     cloudevents.TopicLaborPerformanceEvents,
-			EventType: cloudevents.Type(cloudevents.EntityPerformance, eventType),
+			EventType: cloudevents.Type(entity, eventType),
 			Key:       []byte(key),
 			Value:     payload,
 			Headers:   headers,
@@ -138,22 +145,32 @@ func (p *IntegrationPublisher) newID() string {
 }
 
 // integrationData maps a domain event to its integration event name,
-// partition key, CloudEvents subject, and snake_case JSON payload. The
-// bool return is false for an event type outside the integration
-// contract, so Encode can skip it.
+// `type` entity segment, partition key, CloudEvents subject, and snake_case
+// JSON payload. The bool return is false for an event type outside the
+// integration contract, so Encode can skip it.
 //
-// The partition key is the AssociateId — not the TaskType the analytics
-// stream keys on — because the intended first consumer (workforce-
-// management, ADR 0013) builds a per-associate read cache and needs
-// every event for one associate applied in publish order on a single
-// partition. A robot-station task with no associate keys on the empty
-// string, which is a legitimate, expected key (every such task lands on
-// the same partition as every other unattributed one; still in order
-// relative to each other). The subject is performanceSubject (the
+// LaborStandardDefined / LaborStandardRevised (ADR 0038) are delegated
+// to marshalData, the analytics builder, unchanged: the integration copy
+// carries exactly the analytics `data` (same field names and types), the
+// TaskType partition key (every revision of one task type stays in order
+// for a consumer keeping a local copy) and the StandardId subject. Only
+// the topic and the dataschema stream segment differ.
+//
+// TaskPerformanceRecorded's partition key is the AssociateId — not the
+// TaskType the analytics stream keys on — because the intended first
+// consumer (workforce-management, ADR 0013) builds a per-associate read
+// cache and needs every event for one associate applied in publish order
+// on a single partition. A robot-station task with no associate keys on
+// the empty string, which is a legitimate, expected key (every such task
+// lands on the same partition as every other unattributed one; still in
+// order relative to each other). The subject is performanceSubject (the
 // associate id, falling back to the task id when there is no associate,
 // since a CloudEvents subject is never empty in this fleet).
-func integrationData(e shared.DomainEvent) (eventName, key, subject string, data map[string]any, ok bool) {
+func integrationData(e shared.DomainEvent) (eventName, entity, key, subject string, data map[string]any, ok bool) {
 	switch ev := e.(type) {
+	case shared.LaborStandardDefined, shared.LaborStandardRevised:
+		return marshalData(ev)
+
 	case shared.TaskPerformanceRecorded:
 		data := map[string]any{
 			"task_id":      ev.TaskId,
@@ -174,10 +191,10 @@ func integrationData(e shared.DomainEvent) (eventName, key, subject string, data
 			"completed_at":        ev.CompletedAt,
 		}
 		addHandling(data, ev)
-		return cloudevents.EventTaskPerformanceRecorded, string(ev.AssociateId), performanceSubject(ev), data, true
+		return cloudevents.EventTaskPerformanceRecorded, cloudevents.EntityPerformance, string(ev.AssociateId), performanceSubject(ev), data, true
 
 	default:
-		return "", "", "", nil, false
+		return "", "", "", "", nil, false
 	}
 }
 

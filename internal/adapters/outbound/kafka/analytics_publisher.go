@@ -2,9 +2,10 @@
 // ANALYTICS publisher, which fans this service's own past-tense domain
 // events onto warehouse.labor-performance.analytics, feeding the data
 // product's own projector (ADR-0007); and the INTEGRATION publisher
-// (ADR-0013), which publishes TaskPerformanceRecorded onto
-// warehouse.labor-performance.events, this service's first Published
-// Language for other bounded contexts to consume.
+// (ADR-0013, widened by ADR-0038), which publishes TaskPerformanceRecorded,
+// LaborStandardDefined and LaborStandardRevised onto
+// warehouse.labor-performance.events, this service's Published Language
+// for other bounded contexts to consume.
 //
 // It is strictly ADDITIVE. The OLTP write path is untouched: the domain
 // and application layers still publish through the same

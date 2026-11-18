@@ -197,9 +197,13 @@ func TestOutbox_HandlingUnitFlowsEndToEndThroughTheRealStack(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("define CASE: %v", err)
 	}
-	// The CASE definition is a Defined (not a Revised) and carries the unit.
-	if got := countOutbox(t, pool, "event_type LIKE '%LaborStandardDefined' AND convert_from(value,'UTF8')::jsonb->'data'->>'handling_unit' = 'CASE' AND (convert_from(value,'UTF8')::jsonb->'data'->>'team_lift_threshold_g')::bigint = 18000 AND (convert_from(value,'UTF8')::jsonb->'data'->>'team_lift_expected_seconds')::bigint = 75"); got != 1 {
-		t.Fatalf("expected 1 LaborStandardDefined outbox row carrying the CASE declaration, got %d", got)
+	// The CASE definition is a Defined (not a Revised) and carries the unit,
+	// on BOTH topics (ADR 0038: the standard events are on the integration
+	// topic too, with the analytics data unchanged).
+	for _, topic := range []string{"warehouse.labor-performance.analytics", "warehouse.labor-performance.events"} {
+		if got := countOutbox(t, pool, fmt.Sprintf("topic = '%s' AND event_type LIKE '%%LaborStandardDefined' AND convert_from(value,'UTF8')::jsonb->'data'->>'handling_unit' = 'CASE' AND (convert_from(value,'UTF8')::jsonb->'data'->>'team_lift_threshold_g')::bigint = 18000 AND (convert_from(value,'UTF8')::jsonb->'data'->>'team_lift_expected_seconds')::bigint = 75", topic)); got != 1 {
+			t.Fatalf("topic %s: expected 1 LaborStandardDefined outbox row carrying the CASE declaration, got %d", topic, got)
+		}
 	}
 	if got := countOutbox(t, pool, "event_type LIKE '%LaborStandardRevised'"); got != 0 {
 		t.Fatalf("a CASE definition must not revise the task-type-only standard, got %d Revised rows", got)
