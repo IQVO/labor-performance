@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	ce "github.com/cloudevents/sdk-go/v2/event"
+	kafkago "github.com/segmentio/kafka-go"
 
 	"github.com/claudioed/labor-performance/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/labor-performance/internal/domain/shared"
@@ -124,16 +125,43 @@ func TestIntegrationPublisherSkipsEventsOutsideTheContract(t *testing.T) {
 	}
 }
 
+// standardEventCase is one standard event and the integration message it
+// must become.
+type standardEventCase struct {
+	event      shared.DomainEvent
+	wantType   string
+	wantSchema string
+	wantKey    string
+	wantSubj   string
+}
+
+// assertStandardIntegrationMessage checks one published standard event:
+// type, events-stream dataschema, task-type key, standard-id subject,
+// content-type header, and that Encode routes it to the integration topic.
+func assertStandardIntegrationMessage(t *testing.T, p *IntegrationPublisher, msg kafkago.Message, tc standardEventCase) {
+	t.Helper()
+	env, _ := decodePlain(t, msg.Value)
+	if env.Type() != tc.wantType || env.DataSchema() != tc.wantSchema {
+		t.Errorf("type %q schema %q, want %q %q", env.Type(), env.DataSchema(), tc.wantType, tc.wantSchema)
+	}
+	if got := string(msg.Key); got != tc.wantKey {
+		t.Errorf("partition key = %q, want the task type %q", got, tc.wantKey)
+	}
+	if env.Subject() != tc.wantSubj {
+		t.Errorf("subject = %q, want the standard id %q", env.Subject(), tc.wantSubj)
+	}
+	assertContentTypeHeader(t, msg.Headers)
+
+	msgs, err := p.Encode(context.Background(), tc.event)
+	if err != nil || len(msgs) != 1 || msgs[0].Topic != cloudevents.TopicLaborPerformanceEvents || msgs[0].EventType != tc.wantType {
+		t.Fatalf("Encode = %+v, %v; want one %s message on the integration topic", msgs, err, tc.wantType)
+	}
+}
+
 // ADR 0038: the standard events are part of the integration contract,
 // keyed by task type, subject the standard id, events-stream dataschema.
 func TestIntegrationPublisherPublishesTheStandardEvents(t *testing.T) {
-	cases := []struct {
-		event      shared.DomainEvent
-		wantType   string
-		wantSchema string
-		wantKey    string
-		wantSubj   string
-	}{
+	cases := []standardEventCase{
 		{shared.NewLaborStandardDefined(at(9), "std-1", shared.Pick, 45, nil, at(9)), cloudevents.TypeLaborStandardDefined,
 			"urn:warehouse:labor-performance:events:LaborStandardDefined:v1", "PICK", "std-1"},
 		{shared.NewLaborStandardRevised(at(10), "std-2", shared.Pack, 45, 40, nil, at(10)), cloudevents.TypeLaborStandardRevised,
@@ -148,22 +176,7 @@ func TestIntegrationPublisherPublishesTheStandardEvents(t *testing.T) {
 			if len(w.msgs) != 1 {
 				t.Fatalf("got %d messages, want 1", len(w.msgs))
 			}
-			env, _ := decodePlain(t, w.msgs[0].Value)
-			if env.Type() != tc.wantType || env.DataSchema() != tc.wantSchema {
-				t.Errorf("type %q schema %q, want %q %q", env.Type(), env.DataSchema(), tc.wantType, tc.wantSchema)
-			}
-			if got := string(w.msgs[0].Key); got != tc.wantKey {
-				t.Errorf("partition key = %q, want the task type %q", got, tc.wantKey)
-			}
-			if env.Subject() != tc.wantSubj {
-				t.Errorf("subject = %q, want the standard id %q", env.Subject(), tc.wantSubj)
-			}
-			assertContentTypeHeader(t, w.msgs[0].Headers)
-
-			msgs, err := p.Encode(context.Background(), tc.event)
-			if err != nil || len(msgs) != 1 || msgs[0].Topic != cloudevents.TopicLaborPerformanceEvents || msgs[0].EventType != tc.wantType {
-				t.Fatalf("Encode = %+v, %v; want one %s message on the integration topic", msgs, err, tc.wantType)
-			}
+			assertStandardIntegrationMessage(t, p, w.msgs[0], tc)
 		})
 	}
 }

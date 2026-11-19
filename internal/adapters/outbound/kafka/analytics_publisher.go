@@ -137,37 +137,12 @@ func (p *AnalyticsPublisher) Publish(ctx context.Context, events ...shared.Domai
 // no request span of its own: injecting now is what lets the projector's
 // consume span still become a child of the originating request.
 func (p *AnalyticsPublisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([]Encoded, error) {
-	out := make([]Encoded, 0, len(events))
-	for _, event := range events {
-		eventType, entity, key, subject, data, ok := marshalData(event)
-		if !ok {
-			continue
-		}
-
-		payload, err := cloudevents.New(cloudevents.Spec{
-			ID:        p.newID(),
-			Entity:    entity,
-			EventName: eventType,
-			Subject:   subject,
-			Time:      event.OccurredAt(),
-			Stream:    cloudevents.StreamAnalytics,
-			Version:   1,
-			Data:      data,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("kafka: encode analytics cloudevent: %w", err)
-		}
-		headers := []kafkago.Header{cloudevents.ContentTypeHeader()}
-		otelkafka.Inject(ctx, &headers)
-		out = append(out, Encoded{
-			Topic:     cloudevents.TopicLaborPerformanceAnalytics,
-			EventType: cloudevents.Type(entity, eventType),
-			Key:       []byte(key),
-			Value:     payload,
-			Headers:   headers,
-		})
-	}
-	return out, nil
+	return encodeStream(ctx, streamEncoding{
+		stream: cloudevents.StreamAnalytics,
+		topic:  cloudevents.TopicLaborPerformanceAnalytics,
+		label:  "analytics",
+		build:  marshalData,
+	}, p.newID, events)
 }
 
 // newID mints a CloudEvent id, returning "" only when no generator

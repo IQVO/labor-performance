@@ -101,37 +101,12 @@ func (p *IntegrationPublisher) Publish(ctx context.Context, events ...shared.Dom
 // mode the send happens later on the relay goroutine, which has no
 // request span of its own.
 func (p *IntegrationPublisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([]Encoded, error) {
-	out := make([]Encoded, 0, len(events))
-	for _, event := range events {
-		eventType, entity, key, subject, data, ok := integrationData(event)
-		if !ok {
-			continue
-		}
-
-		payload, err := cloudevents.New(cloudevents.Spec{
-			ID:        p.newID(),
-			Entity:    entity,
-			EventName: eventType,
-			Subject:   subject,
-			Time:      event.OccurredAt(),
-			Stream:    cloudevents.StreamEvents,
-			Version:   1,
-			Data:      data,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("kafka: encode integration cloudevent: %w", err)
-		}
-		headers := []kafkago.Header{cloudevents.ContentTypeHeader()}
-		otelkafka.Inject(ctx, &headers)
-		out = append(out, Encoded{
-			Topic:     cloudevents.TopicLaborPerformanceEvents,
-			EventType: cloudevents.Type(entity, eventType),
-			Key:       []byte(key),
-			Value:     payload,
-			Headers:   headers,
-		})
-	}
-	return out, nil
+	return encodeStream(ctx, streamEncoding{
+		stream: cloudevents.StreamEvents,
+		topic:  cloudevents.TopicLaborPerformanceEvents,
+		label:  "integration",
+		build:  integrationData,
+	}, p.newID, events)
 }
 
 // newID mints a CloudEvent id, returning "" only when no generator

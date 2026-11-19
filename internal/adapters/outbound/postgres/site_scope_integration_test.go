@@ -1,7 +1,7 @@
 //go:build integration
 
 // ADR 0038 decision 2 against a real PostgreSQL (testcontainers): migration
-// 0008 adds labor_standards.site_code (default '') and widens the
+// 0008 adds labor_standards.site_code (default: the empty code) and widens the
 // one-open-standard index to (task_type, handling_unit, site_code); the
 // repository round-trips the site and keeps every pre-ADR-0038 lookup on
 // the site-less standards (decision 3).
@@ -58,11 +58,11 @@ func TestPostgres_SiteStandardRoundTripAndIsolation(t *testing.T) {
 
 	// Each exact scope resolves to exactly its own row, site included.
 	for scope, want := range map[standard.Scope]shared.StandardId{
-		{TaskType: shared.Pick}:                                             "std-any",
-		{TaskType: shared.Pick, HandlingUnit: shared.Case}:                  "std-case",
-		{TaskType: shared.Pick, SiteCode: itSite}:                           "std-site",
+		{TaskType: shared.Pick}:                                              "std-any",
+		{TaskType: shared.Pick, HandlingUnit: shared.Case}:                   "std-case",
+		{TaskType: shared.Pick, SiteCode: itSite}:                            "std-site",
 		{TaskType: shared.Pick, HandlingUnit: shared.Case, SiteCode: itSite}: "std-site-case",
-		{TaskType: shared.Pick, SiteCode: itOtherSite}:                      "std-other-site",
+		{TaskType: shared.Pick, SiteCode: itOtherSite}:                       "std-other-site",
 	} {
 		got, err := repo.FindCurrentlyActiveForScope(ctx, scope)
 		if err != nil || got == nil || got.ID() != want || got.Scope() != scope {
@@ -139,8 +139,8 @@ func TestPostgres_OneOpenStandardPerTriple(t *testing.T) {
 		t.Fatalf("new site standard after close: %v", err)
 	}
 	for scope, want := range map[standard.Scope]shared.StandardId{
-		{TaskType: shared.Pick}:                                             "a",
-		{TaskType: shared.Pick, SiteCode: itOtherSite}:                      "c",
+		{TaskType: shared.Pick}:                                              "a",
+		{TaskType: shared.Pick, SiteCode: itOtherSite}:                       "c",
 		{TaskType: shared.Pick, HandlingUnit: shared.Case, SiteCode: itSite}: "d",
 	} {
 		if got, _ := repo.FindCurrentlyActiveForScope(ctx, scope); got == nil || got.ID() != want || got.EffectiveTo() != nil {
@@ -190,7 +190,7 @@ func (p *capturePublisher) Publish(_ context.Context, evts ...shared.DomainEvent
 }
 
 // TestMigration0008_UpgradesAndRollsBackWithData: 0008 is safe on a
-// database that already holds standards (they become site-less, '' ),
+// database that already holds standards (they become site-less: the empty code),
 // rejects an invalid site code at the column, lets a site standard coexist
 // with the site-less one, and the down migration removes the site rows and
 // restores the (task_type, handling_unit) index.
