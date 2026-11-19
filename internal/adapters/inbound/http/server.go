@@ -141,8 +141,14 @@ func (s *Server) handleDefineStandard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	site, err := shared.NewSiteCode(req.SiteCode)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
 	spec := usecases.DefineStandardSpec{
-		TaskType: taskType, HandlingUnit: unit,
+		TaskType: taskType, HandlingUnit: unit, SiteCode: site,
 		ExpectedSeconds: req.ExpectedSeconds, TravelComponentSeconds: req.TravelComponentSeconds,
 	}
 	if req.TeamLift != nil {
@@ -174,7 +180,16 @@ func (s *Server) handleGetStandard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, err := s.GetStandard.ExecuteResolved(r.Context(), taskType, unit)
+	// The optional siteCode query reads that site's standard EXACTLY (ADR
+	// 0038): no fallback to the site-less one, 404 when the site has none.
+	// Without it the answer is the site-less standard, as before.
+	site, err := shared.NewSiteCode(r.URL.Query().Get("siteCode"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	st, err := s.GetStandard.ExecuteForSite(r.Context(), taskType, unit, site)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -292,10 +307,12 @@ func toStandardResponse(taskType shared.TaskType, expectedSeconds int64, travelC
 }
 
 // standardResponseOf maps a LaborStandard to its response body, adding the
-// ADR 0035 handling-unit fields only when the standard has them.
+// ADR 0035 handling-unit fields and the ADR 0038 site code only when the
+// standard has them.
 func standardResponseOf(st *standard.LaborStandard) standardResponse {
 	resp := toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.TravelComponentSeconds(), st.EffectiveFrom(), st.EffectiveTo())
 	resp.HandlingUnit = string(st.HandlingUnit())
+	resp.SiteCode = string(st.SiteCode())
 	if tl := st.TeamLift(); tl != nil {
 		resp.TeamLift = &teamLiftResponse{ThresholdG: tl.ThresholdG(), ExpectedSeconds: tl.ExpectedSeconds(), Operators: tl.Operators()}
 	}

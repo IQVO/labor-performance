@@ -46,6 +46,17 @@ type LaborStandardDefined struct {
 	HandlingUnit            HandlingUnit
 	TeamLiftThresholdG      *int64
 	TeamLiftExpectedSeconds *int64
+	// SiteCode is the additive ADR 0038 scope: "" for a site-less standard
+	// (every site; every standard before ADR 0038). Set through WithSite.
+	SiteCode SiteCode
+}
+
+// WithSite returns the event carrying the standard's site scope (ADR 0038).
+// The constructor is unchanged so every site-less caller produces exactly
+// the event it produced before.
+func (e LaborStandardDefined) WithSite(site SiteCode) LaborStandardDefined {
+	e.SiteCode = site
+	return e
 }
 
 // WithHandling returns the event carrying the standard's handling unit and
@@ -90,6 +101,16 @@ type LaborStandardRevised struct {
 	HandlingUnit            HandlingUnit
 	TeamLiftThresholdG      *int64
 	TeamLiftExpectedSeconds *int64
+	// SiteCode is the site scope of the NEW standard (and so of the closed
+	// one: a revision closes only the same scope, ADR 0038); "" = every site.
+	SiteCode SiteCode
+}
+
+// WithSite returns the event carrying the new standard's site scope (ADR
+// 0038).
+func (e LaborStandardRevised) WithSite(site SiteCode) LaborStandardRevised {
+	e.SiteCode = site
+	return e
 }
 
 // WithHandling returns the event carrying the new standard's handling unit

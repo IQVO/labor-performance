@@ -93,7 +93,9 @@ or from `POST /standards` (`DefineStandard`). With `DATABASE_URL` and
 `EVENT_PUBLISHER=kafka` set, both commit their domain event into
 `outbox_events` in the same transaction, and the relay publishes it as a
 CloudEvents 1.0 event in structured mode to `warehouse.labor-performance.analytics`.
-`TaskPerformanceRecorded` also goes to `warehouse.labor-performance.events`.
+`TaskPerformanceRecorded`, `LaborStandardDefined` and `LaborStandardRevised`
+also go to `warehouse.labor-performance.events` (the standard events since
+[ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md)).
 No REST, reports or MCP surface is authenticated
 ([ADR 0012](../adr/0012-remove-rest-auth-layer.md)). See the full list in
 [Use cases](../ddd/use-cases.md).
@@ -110,6 +112,7 @@ flowchart LR
 
   FE -- "warehouse.fulfillment.events<br/>TaskCompleted" --> LP
   LP -- "warehouse.labor-performance.events<br/>TaskPerformanceRecorded" --> WFM
+  LP -- "warehouse.labor-performance.events<br/>LaborStandardDefined / Revised" --> WP["warehouse-planning"]
   AG -. "MCP tools + reports REST (reads)" .-> LP
   CON -. "labor_mfe remote, reports panel" .-> LP
 
@@ -125,7 +128,8 @@ table.
 
 This service subscribes to the same shared fan-out topic that
 `wes-work-planning` already consumes from, and publishes its own
-integration topic, which `workforce-management` consumes. Other contexts
+integration topic, which `workforce-management` (performance) and
+`warehouse-planning` (standards, ADR 0038) consume. Other contexts
 read it through its own REST, reports and MCP surfaces. It never calls
 them. See [Integration](../ecosystem/integration.md) for every edge and
 the [Context map](../ecosystem/context-map.md) for the relationship

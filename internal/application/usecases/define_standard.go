@@ -46,23 +46,33 @@ type TeamLiftSpec struct {
 // "" declares the task-type-only standard (what Execute always did); EACH,
 // CASE or PALLET declares the more specific standard for that unit, which
 // wins over the task-type-only one when a completed task carries that unit.
-// TeamLift is optional and only valid for CASE.
+// TeamLift is optional and only valid for CASE. SiteCode "" declares the
+// site-less standard (every site, what Execute always did); a site code
+// declares that site's standard (ADR 0038), which never closes or is closed
+// by the site-less one.
 type DefineStandardSpec struct {
 	TaskType               shared.TaskType
 	HandlingUnit           shared.HandlingUnit
+	SiteCode               shared.SiteCode
 	ExpectedSeconds        int64
 	TravelComponentSeconds *int64
 	TeamLift               *TeamLiftSpec
 }
 
-// ExecuteSpec defines (or revises) the standard for (spec.TaskType,
-// spec.HandlingUnit): the prior open standard of the SAME pair, if any, is
-// closed; standards of other handling units are untouched.
+// scope is the (task type, handling unit, site) the spec declares a
+// standard for.
+func (s DefineStandardSpec) scope() standard.Scope {
+	return standard.Scope{TaskType: s.TaskType, HandlingUnit: s.HandlingUnit, SiteCode: s.SiteCode}
+}
+
+// ExecuteSpec defines (or revises) the standard for the spec's scope
+// (task type, handling unit, site): the prior open standard of the SAME
+// scope, if any, is closed; standards of other scopes are untouched.
 func (uc *DefineStandard) ExecuteSpec(ctx context.Context, spec DefineStandardSpec) (*standard.LaborStandard, error) {
-	taskType, expectedSeconds, travelComponentSeconds := spec.TaskType, spec.ExpectedSeconds, spec.TravelComponentSeconds
+	expectedSeconds, travelComponentSeconds := spec.ExpectedSeconds, spec.TravelComponentSeconds
 	now := uc.Clock.Now()
 
-	prior, err := uc.currentlyActive(ctx, taskType, spec.HandlingUnit)
+	prior, err := uc.currentlyActive(ctx, spec.scope())
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +87,7 @@ func (uc *DefineStandard) ExecuteSpec(ctx context.Context, spec DefineStandardSp
 		return nil, err
 	}
 
-	next, err := standard.NewForUnit(id, taskType, spec.HandlingUnit, expectedSeconds, travelComponentSeconds, teamLift, now)
+	next, err := standard.NewForScope(id, spec.scope(), expectedSeconds, travelComponentSeconds, teamLift, now)
 	if err != nil {
 		uc.rejected(ctx)
 		return nil, err
@@ -88,7 +98,9 @@ func (uc *DefineStandard) ExecuteSpec(ctx context.Context, spec DefineStandardSp
 	// commit together or not at all.
 	err = atomically(ctx, uc.UnitOfWork, func(ctx context.Context) error {
 		if prior != nil {
-			prior.Close(now)
+			if err := next.Supersede(prior); err != nil {
+				return err
+			}
 			if err := uc.Standards.Save(ctx, prior); err != nil {
 				return err
 			}
@@ -111,14 +123,19 @@ func (uc *DefineStandard) ExecuteSpec(ctx context.Context, spec DefineStandardSp
 	return next, nil
 }
 
-// currentlyActive loads the open standard of exactly (taskType, unit); the
-// task-type-only case goes through the original FindCurrentlyActive so the
-// pre-ADR-0035 path is unchanged.
-func (uc *DefineStandard) currentlyActive(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit) (*standard.LaborStandard, error) {
-	if unit == "" {
-		return uc.Standards.FindCurrentlyActive(ctx, taskType)
+// currentlyActive loads the open standard of exactly scope; the
+// task-type-only, site-less case goes through the original
+// FindCurrentlyActive and the site-less unit case through
+// FindCurrentlyActiveForUnit, so the pre-ADR-0035/0038 paths are unchanged.
+func (uc *DefineStandard) currentlyActive(ctx context.Context, scope standard.Scope) (*standard.LaborStandard, error) {
+	switch {
+	case scope.SiteCode != "":
+		return uc.Standards.FindCurrentlyActiveForScope(ctx, scope)
+	case scope.HandlingUnit != "":
+		return uc.Standards.FindCurrentlyActiveForUnit(ctx, scope.TaskType, scope.HandlingUnit)
+	default:
+		return uc.Standards.FindCurrentlyActive(ctx, scope.TaskType)
 	}
-	return uc.Standards.FindCurrentlyActiveForUnit(ctx, taskType, unit)
 }
 
 // atomically runs fn inside uow when one is wired, or directly otherwise.
@@ -151,8 +168,8 @@ func (uc *DefineStandard) buildTeamLift(ctx context.Context, spec DefineStandard
 	return &tl, nil
 }
 
-// publish emits Revised when a prior standard of the same pair was closed,
-// Defined otherwise, both carrying the handling unit and team lift.
+// publish emits Revised when a prior standard of the same scope was closed,
+// Defined otherwise, both carrying the handling unit, team lift and site.
 func (uc *DefineStandard) publish(ctx context.Context, spec DefineStandardSpec, id shared.StandardId, prior *standard.LaborStandard, teamLift *standard.TeamLift, now time.Time) error {
 	var thresholdG, teamLiftSeconds *int64
 	if teamLift != nil {
@@ -161,8 +178,8 @@ func (uc *DefineStandard) publish(ctx context.Context, spec DefineStandardSpec, 
 	}
 	if prior != nil {
 		return uc.Events.Publish(ctx, shared.NewLaborStandardRevised(now, id, spec.TaskType, prior.ExpectedSeconds(), spec.ExpectedSeconds, spec.TravelComponentSeconds, now).
-			WithHandling(spec.HandlingUnit, thresholdG, teamLiftSeconds))
+			WithHandling(spec.HandlingUnit, thresholdG, teamLiftSeconds).WithSite(spec.SiteCode))
 	}
 	return uc.Events.Publish(ctx, shared.NewLaborStandardDefined(now, id, spec.TaskType, spec.ExpectedSeconds, spec.TravelComponentSeconds, now).
-		WithHandling(spec.HandlingUnit, thresholdG, teamLiftSeconds))
+		WithHandling(spec.HandlingUnit, thresholdG, teamLiftSeconds).WithSite(spec.SiteCode))
 }

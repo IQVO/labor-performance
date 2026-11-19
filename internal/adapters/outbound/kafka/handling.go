@@ -32,3 +32,14 @@ func addStandardHandling(fields map[string]any, unit shared.HandlingUnit, thresh
 		fields["team_lift_expected_seconds"] = *teamLiftSeconds
 	}
 }
+
+// addStandardSite adds the ADR 0038 site_code to a LaborStandardDefined /
+// LaborStandardRevised payload, ONLY for a site-scoped standard. A site-less
+// standard (every standard before ADR 0038) keeps the exact previous
+// payload: omitted, never null or "", so every existing golden is
+// byte-identical and a consumer treats an absent site_code as "every site".
+func addStandardSite(fields map[string]any, site shared.SiteCode) {
+	if site != "" {
+		fields["site_code"] = string(site)
+	}
+}

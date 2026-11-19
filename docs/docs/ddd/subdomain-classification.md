@@ -135,9 +135,11 @@ terms whose code name differs flagged — lives on the
 `LaborStandardDefined`, `LaborStandardRevised`, `TaskPerformanceRecorded`.
 The default publisher only logs them. With `EVENT_PUBLISHER=kafka` all three
 go to `warehouse.labor-performance.analytics`, which feeds this service's
-own analytical projector (ADR 0007). `TaskPerformanceRecorded` also goes to
+own analytical projector (ADR 0007). `TaskPerformanceRecorded`, and since
+ADR 0038 `LaborStandardDefined` and `LaborStandardRevised`, also go to
 the integration topic `warehouse.labor-performance.events` (ADR 0013), which
-`workforce-management` consumes. It carries an additive, nullable
+`workforce-management` (performance) and `warehouse-planning` (standards)
+consume. `TaskPerformanceRecorded` carries an additive, nullable
 `idle_seconds_before` field (ADR 0014). With Postgres configured, both
 topics are fed through the transactional outbox (ADR 0010). Full type
 strings, keys and payloads: [Domain Events](./domain-events.md). Where

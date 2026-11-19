@@ -5,8 +5,9 @@
 # domain-events.md ("Published"): CloudEvents 1.0 structured mode with a fresh
 # `id` per message, `source` /warehouse/labor-performance, `time` = the domain
 # event's OccurredAt in UTC, `dataschema` urn:warehouse:labor-performance:
-# <stream>:<EventName>:v1; the standard events go to the analytics topic ONLY
-# (partition key task_type, subject the new standard_id); TaskPerformanceRecorded
+# <stream>:<EventName>:v1; the standard events go to BOTH topics with the same
+# data but separate ids (ADR 0038; partition key task_type and subject the new
+# standard_id on both); TaskPerformanceRecorded
 # goes to BOTH topics with the same data but separate ids (analytics key
 # task_type, integration key associate_id); efficiency_pct and
 # idle_seconds_before are null, never 0; handling_unit/team_lift and the travel
@@ -24,7 +25,7 @@ Feature: The event contract other contexts and the projector rely on
     Given the Labor Performance service is running
 
   @bdd
-  Scenario: A first definition is announced on the analytics topic only, keyed by task type
+  Scenario: A first definition is announced on both topics, keyed by task type
     Given the clock is at "2026-10-01T09:30:00Z"
     When a standard of 45 expected seconds and a travel component of 15 seconds is defined for task type "PICK"
     Then the request is accepted with status 201
@@ -36,7 +37,11 @@ Feature: The event contract other contexts and the projector rely on
     And the analytics "LaborStandardDefined" message data field "expected_seconds" is 45
     And the analytics "LaborStandardDefined" message data field "travel_component_seconds" is 15
     And the analytics "LaborStandardDefined" message data field "effective_from" is "2026-10-01T09:30:00Z"
-    And 0 integration "LaborStandardDefined" messages were encoded
+    And 1 integration "LaborStandardDefined" message was encoded
+    And the integration "LaborStandardDefined" message is on topic "warehouse.labor-performance.events" with key "PICK" and subject "std-1"
+    And the integration "LaborStandardDefined" message has type "com.warehouse.wes.labor-performance.standard.LaborStandardDefined" and data schema "urn:warehouse:labor-performance:events:LaborStandardDefined:v1"
+    And the integration "LaborStandardDefined" message is a CloudEvents 1.0 event from "/warehouse/labor-performance" occurring at "2026-10-01T09:30:00Z"
+    And the analytics and integration "LaborStandardDefined" messages carry the same data under different ids
 
   @bdd
   Scenario: What a standard does not declare is omitted from its event, not sent as null or zero
@@ -59,7 +64,10 @@ Feature: The event contract other contexts and the projector rely on
     And the analytics "LaborStandardRevised" message data field "expected_seconds" is 40
     And the analytics "LaborStandardRevised" message data field "effective_from" is "2026-10-01T10:00:00Z"
     And the analytics "LaborStandardRevised" message data has no field "travel_component_seconds"
-    And 0 integration "LaborStandardRevised" messages were encoded
+    And 1 integration "LaborStandardRevised" message was encoded
+    And the integration "LaborStandardRevised" message is on topic "warehouse.labor-performance.events" with key "PICK" and subject "std-2"
+    And the integration "LaborStandardRevised" message has type "com.warehouse.wes.labor-performance.standard.LaborStandardRevised" and data schema "urn:warehouse:labor-performance:events:LaborStandardRevised:v1"
+    And the analytics and integration "LaborStandardRevised" messages carry the same data under different ids
 
   @bdd
   Scenario: A revision's event carries the travel component of the new standard, not the closed one's
@@ -82,6 +90,8 @@ Feature: The event contract other contexts and the projector rely on
     Then the request is rejected with status 422
     And 0 analytics "LaborStandardDefined" messages were encoded
     And 0 analytics "LaborStandardRevised" messages were encoded
+    And 0 integration "LaborStandardDefined" messages were encoded
+    And 0 integration "LaborStandardRevised" messages were encoded
 
   @bdd
   Scenario: A recorded task goes out twice, keyed by task type for analytics and by associate for integration

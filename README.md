@@ -71,10 +71,14 @@ already carries `associate_id` and `duration_seconds` on the existing
 This context DOES expose its own REST API (to configure standards and
 read performance scores) — that is this context's OWN Open Host Service,
 symmetric with every other context in the fleet. It also publishes its own
-integration event, `TaskPerformanceRecorded`, on
-`warehouse.labor-performance.events`
+integration events on `warehouse.labor-performance.events`:
+`TaskPerformanceRecorded`
 ([ADR 0013](docs/docs/adr/0013-labor-performance-integration-events.md)),
-which `workforce-management` consumes as its measured-rate cache. Every
+which `workforce-management` consumes as its measured-rate cache, and,
+since [ADR 0038](docs/docs/adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md),
+`LaborStandardDefined` and `LaborStandardRevised` (the analytics payload,
+keyed by task type), from which `warehouse-planning` keeps a local copy of
+the standards. Every
 integration is inbound or published: this service makes **no** outbound
 REST or MCP call to any sibling context
 ([ADR 0015](docs/docs/adr/0015-optional-travel-component-on-labor-standard.md)
@@ -145,7 +149,7 @@ internal/
     outbound/telemetry/           OTel traces/metrics/logs (copied from workforce-management)
   pgtx/                           the one tx-in-context mechanism shared by the
                                    idempotency middleware and the Postgres UnitOfWork
-migrations/                       golang-migrate SQL files (OLTP schema, 0001–0006)
+migrations/                       golang-migrate SQL files (OLTP schema, 0001–0008)
 migrations/analytics/             golang-migrate SQL files (analytical schema, 0001)
 apis/openapi.yaml                 This service's OWN OLTP REST API (6 endpoints + /healthz + /readyz)
 apis/openapi-reports.yaml         The read-only reports API (ADR 0007)
@@ -175,6 +179,13 @@ struct tags in the domain packages.
   standard's effective range and starts a new one — it never overwrites
   `ExpectedSeconds` in place. See
   [ADR 0004](docs/docs/adr/0004-standard-frozen-at-completion-time-not-recomputed.md).
+- **A standard may be scoped to one site, and scoring ignores it.** An
+  optional `siteCode` (1-32 characters, no whitespace; absent = every
+  site) is declarative input, never looked up in a sibling. At most one
+  standard is open per (task type, handling unit, site), and a revision
+  closes only the same triple. Completed tasks are still scored against
+  site-less standards only. See
+  [ADR 0038](docs/docs/adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md).
 - **A `TaskPerformance`'s `StandardSecondsAtCompletion` is resolved
   once, "active AS OF `CompletedAt`", and frozen forever.** A revision
   never rewrites a past row's efficiency, and a possibly out-of-order or
@@ -346,8 +357,8 @@ ruleset (`.spectral.yaml`) that enforces it in the `api-lint` job.
 
 | Method | Path | Use case |
 | --- | --- | --- |
-| `POST` | `/standards` | DefineStandard (optional `travelComponentSeconds`, ADR 0015). Requires an `Idempotency-Key` header (1-128 printable ASCII; missing is 400 `idempotency-key-required`, malformed is 400 `idempotency-key-invalid`); a replay answers with `Idempotency-Replayed: true`, the same key with another method, path or body is 409 `idempotency-key-reused`. See ADR 0016 and ADR 0037. |
-| `GET` | `/standards/{taskType}` | GetStandard |
+| `POST` | `/standards` | DefineStandard (optional `travelComponentSeconds`, ADR 0015; optional `handlingUnit`/`teamLift`, ADR 0035; optional `siteCode`, ADR 0038). Requires an `Idempotency-Key` header (1-128 printable ASCII; missing is 400 `idempotency-key-required`, malformed is 400 `idempotency-key-invalid`); a replay answers with `Idempotency-Replayed: true`, the same key with another method, path or body is 409 `idempotency-key-reused`. See ADR 0016 and ADR 0037. |
+| `GET` | `/standards/{taskType}` | GetStandard: the site-less standard; `?handlingUnit=` resolves the most specific unit standard (ADR 0035); `?siteCode=` reads exactly that site's standard, 404 when it has none (ADR 0038) |
 | `GET` | `/associates/{associateId}/scorecard` | GetAssociateScorecard |
 | `GET` | `/task-types/{taskType}/performance` | GetTaskTypePerformance |
 | `GET` | `/task-types/{taskType}/utilization?window=1h` | GetUtilization (ADR 0014) |
@@ -645,10 +656,12 @@ and have since been added, bringing this service to full fleet parity with
   ([ADR 0009](docs/docs/adr/0009-mcp-inbound-adapter.md)).
 - **A2A inbound adapter** — `cmd/a2a`, read-only
   ([ADR 0036](docs/docs/adr/0036-a2a-inbound-adapter.md)).
-- **Integration event** — `TaskPerformanceRecorded` on
-  `warehouse.labor-performance.events`, consumed by
-  `workforce-management`
-  ([ADR 0013](docs/docs/adr/0013-labor-performance-integration-events.md)).
+- **Integration events** — on `warehouse.labor-performance.events`:
+  `TaskPerformanceRecorded`, consumed by `workforce-management`
+  ([ADR 0013](docs/docs/adr/0013-labor-performance-integration-events.md)),
+  and `LaborStandardDefined` / `LaborStandardRevised` for
+  `warehouse-planning`'s local copy of the standards
+  ([ADR 0038](docs/docs/adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md)).
 
 ## Architecture Decision Records
 
@@ -686,6 +699,7 @@ and have since been added, bringing this service to full fleet parity with
 33. [0033 — MCP tool invocation and denial counters](docs/docs/adr/0033-mcp-invocation-and-denial-counters.md)
 36. [0036 — A2A inbound adapter (read-only)](docs/docs/adr/0036-a2a-inbound-adapter.md)
 37. [0037 — Adopt the fleet REST API guideline](docs/docs/adr/0037-adopt-fleet-rest-api-guideline.md)
+38. [0038 — Labor standards on the integration topic, with an optional site scope](docs/docs/adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md)
 
 The same list, with statuses, is in [docs/docs/adr/about.md](docs/docs/adr/about.md).
 

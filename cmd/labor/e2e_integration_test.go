@@ -492,13 +492,13 @@ func phaseRows(t *testing.T, db pgView) {
 			t.Fatalf("%s = %d, want 1", q, n)
 		}
 	}
-	// The standard raises LaborStandardDefined (analytics only); the recorded
-	// performance raises TaskPerformanceRecorded on BOTH topics.
-	if n := db.count(`SELECT count(*) FROM outbox_events`); n != 3 {
-		t.Fatalf("outbox rows = %d, want 3", n)
+	// The standard raises LaborStandardDefined and the recorded performance
+	// TaskPerformanceRecorded, each on BOTH topics (ADR 0013, ADR 0038).
+	if n := db.count(`SELECT count(*) FROM outbox_events`); n != 4 {
+		t.Fatalf("outbox rows = %d, want 4", n)
 	}
 	waitFor(t, 60*time.Second, "the relay to publish every outbox row", func() bool { return db.unpublished() == 0 })
-	for topic, want := range map[string]int{cloudevents.TopicLaborPerformanceEvents: 1, cloudevents.TopicLaborPerformanceAnalytics: 2} {
+	for topic, want := range map[string]int{cloudevents.TopicLaborPerformanceEvents: 2, cloudevents.TopicLaborPerformanceAnalytics: 2} {
 		if n := db.count(`SELECT count(*) FROM outbox_events WHERE topic = $1`, topic); n != want {
 			t.Fatalf("outbox rows for %s = %d, want %d", topic, n, want)
 		}
@@ -508,8 +508,11 @@ func phaseRows(t *testing.T, db pgView) {
 // Phase 4: the CloudEvents on both output topics, byte-exact envelope.
 func phaseTopics(t *testing.T, brokers []string) {
 	t.Helper()
-	ev := consume(t, brokers, cloudevents.TopicLaborPerformanceEvents, 1)
-	perf := assertEnvelope(t, ev[0], "performance", "TaskPerformanceRecorded", "events", "A-1", "A-1")
+	ev := consume(t, brokers, cloudevents.TopicLaborPerformanceEvents, 2)
+	// ADR 0038: the standard is on the integration topic too, keyed by task
+	// type, subject the standard id, the analytics data unchanged.
+	evDefined := assertEnvelope(t, ev[0], "standard", "LaborStandardDefined", "events", decodeStandardID(t, ev[0]), "PICK")
+	perf := assertEnvelope(t, ev[1], "performance", "TaskPerformanceRecorded", "events", "A-1", "A-1")
 	var data struct {
 		TaskID        string   `json:"task_id"`
 		AssociateID   string   `json:"associate_id"`
@@ -530,6 +533,10 @@ func phaseTopics(t *testing.T, brokers []string) {
 	}
 	if err := json.Unmarshal(defined.Data, &def); err != nil || def.TaskType != "PICK" || def.ExpectedSeconds != 60 {
 		t.Fatalf("LaborStandardDefined data = %s (%v)", defined.Data, err)
+	}
+	if string(evDefined.Data) != string(defined.Data) || evDefined.Subject != defined.Subject || evDefined.ID == defined.ID {
+		t.Fatalf("integration LaborStandardDefined (%s, %s, data %s) must carry the analytics data (%s, %s, data %s) under its own id",
+			evDefined.ID, evDefined.Subject, evDefined.Data, defined.ID, defined.Subject, defined.Data)
 	}
 	aPerf := assertEnvelope(t, an[1], "performance", "TaskPerformanceRecorded", "analytics", "A-1", "PICK")
 	// One occurrence, one CloudEvents id... on its two topics (each topic's
@@ -585,10 +592,10 @@ func phaseReplay(t *testing.T, s *service, db pgView, brokers []string) {
 	if n := db.count(`SELECT count(*) FROM task_performances`); n != 1 {
 		t.Fatalf("task_performances rows after the redelivery = %d, want 1", n)
 	}
-	if n := db.count(`SELECT count(*) FROM outbox_events`); n != 3 {
-		t.Fatalf("outbox rows after the replay = %d, want still 3", n)
+	if n := db.count(`SELECT count(*) FROM outbox_events`); n != 4 {
+		t.Fatalf("outbox rows after the replay = %d, want still 4", n)
 	}
-	noMoreMessages(t, brokers, cloudevents.TopicLaborPerformanceEvents, 1)
+	noMoreMessages(t, brokers, cloudevents.TopicLaborPerformanceEvents, 2)
 	noMoreMessages(t, brokers, cloudevents.TopicLaborPerformanceAnalytics, 2)
 }
 
@@ -610,12 +617,12 @@ func phaseRestart(t *testing.T, e e2eEnv, s *service, db pgView, brokers []strin
 		return status == http.StatusOK && strings.Contains(raw, `"taskCount":2`)
 	})
 	waitFor(t, 60*time.Second, "the relay to publish after the restart", func() bool { return db.unpublished() == 0 })
-	msgs := consume(t, brokers, cloudevents.TopicLaborPerformanceEvents, 2)
-	if a, b := decodeEnvelope(t, msgs[0]).ID, decodeEnvelope(t, msgs[1]).ID; a == b {
-		t.Fatalf("both integration messages carry the id %s: an event was published twice", a)
+	msgs := consume(t, brokers, cloudevents.TopicLaborPerformanceEvents, 3)
+	if a, b := decodeEnvelope(t, msgs[1]).ID, decodeEnvelope(t, msgs[2]).ID; a == b {
+		t.Fatalf("both integration TaskPerformanceRecorded messages carry the id %s: an event was published twice", a)
 	}
-	noMoreMessages(t, brokers, cloudevents.TopicLaborPerformanceEvents, 2)
-	assertEnvelope(t, msgs[1], "performance", "TaskPerformanceRecorded", "events", "A-1", "A-1")
+	noMoreMessages(t, brokers, cloudevents.TopicLaborPerformanceEvents, 3)
+	assertEnvelope(t, msgs[2], "performance", "TaskPerformanceRecorded", "events", "A-1", "A-1")
 	return s2
 }
 

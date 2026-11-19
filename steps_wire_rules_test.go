@@ -199,12 +199,12 @@ func (r *rules) messageCount(count int, stream, name string) error {
 	return nil
 }
 
-func (r *rules) sameDataDifferentIds() error {
-	a, err := r.lastMessage("analytics", "TaskPerformanceRecorded")
+func (r *rules) sameDataDifferentIds(name string) error {
+	a, err := r.lastMessage("analytics", name)
 	if err != nil {
 		return err
 	}
-	i, err := r.lastMessage("integration", "TaskPerformanceRecorded")
+	i, err := r.lastMessage("integration", name)
 	if err != nil {
 		return err
 	}
@@ -225,5 +225,5 @@ func registerWireSteps(sc *godog.ScenarioContext, r *rules) {
 	sc.Step(`^the `+stream+` "([^"]*)" message data field "([^"]*)" is (.+)$`, r.messageField)
 	sc.Step(`^the `+stream+` "([^"]*)" message data has no field "([^"]*)"$`, r.messageNoField)
 	sc.Step(`^(\d+) `+stream+` "([^"]*)" messages? (?:was|were) encoded$`, r.messageCount)
-	sc.Step(`^the analytics and integration "TaskPerformanceRecorded" messages carry the same data under different ids$`, r.sameDataDifferentIds)
+	sc.Step(`^the analytics and integration "([^"]*)" messages carry the same data under different ids$`, r.sameDataDifferentIds)
 }

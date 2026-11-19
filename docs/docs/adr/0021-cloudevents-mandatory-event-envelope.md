@@ -43,7 +43,7 @@ EVERY message this service writes to or reads from Kafka is a CloudEvents
 
 | direction | topic | types |
 |---|---|---|
-| publish (integration) | `warehouse.labor-performance.events` | `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded` |
+| publish (integration) | `warehouse.labor-performance.events` | `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded` (events + analytics), `com.warehouse.wes.labor-performance.standard.LaborStandardDefined` (events + analytics), `com.warehouse.wes.labor-performance.standard.LaborStandardRevised` (events + analytics) — the standard events since [ADR 0038](./0038-labor-standards-on-the-integration-topic-and-site-scope.md) |
 | publish (analytics) | `warehouse.labor-performance.analytics` | `com.warehouse.wes.labor-performance.standard.LaborStandardDefined`, `com.warehouse.wes.labor-performance.standard.LaborStandardRevised`, `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded` |
 | consume (OLTP) | `warehouse.fulfillment.events` | `com.warehouse.wes.fulfillment-execution.task.TaskCompleted` |
 | consume (projector) | `warehouse.labor-performance.analytics` | the three analytics types above |
@@ -57,7 +57,8 @@ toggle.
   is the JSON event format; every produced message carries the Kafka
   header `content-type: application/cloudevents+json; charset=UTF-8`.
 - Message key and the `kafkago.Hash{}` balancer are unchanged (ADR 0018):
-  AssociateId on the integration topic, TaskType on the analytics topic.
+  AssociateId for TaskPerformanceRecorded on the integration topic (TaskType
+  for the standard events there, ADR 0038), TaskType on the analytics topic.
 - W3C trace context stays in `traceparent`/`tracestate` Kafka headers; it
   is not duplicated into extension attributes.
 - Events are built, validated and (un)marshalled only through
@@ -111,7 +112,11 @@ version and a new `.v2` type, never a mutation.
 
 This service's exact strings consumed elsewhere:
 `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`
-→ workforce-management (and this service's own projector). Consumed from
+→ workforce-management (and this service's own projector);
+`com.warehouse.wes.labor-performance.standard.LaborStandardDefined` and
+`com.warehouse.wes.labor-performance.standard.LaborStandardRevised` →
+warehouse-planning, on the integration topic since ADR 0038 (and this
+service's own projector, on the analytics topic). Consumed from
 elsewhere: `com.warehouse.wes.fulfillment-execution.task.TaskCompleted`
 (fulfillment-execution). The fleet-wide table lives in each repo's
 CloudEvents ADR and in warehouse-docs.

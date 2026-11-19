@@ -24,6 +24,11 @@ type defineStandardRequest struct {
 	// TeamLift is OPTIONAL and only valid with handlingUnit CASE: the
 	// declared heavy-case rule (ADR 0035).
 	TeamLift *teamLiftRequest `json:"teamLift,omitempty"`
+	// SiteCode is OPTIONAL (ADR 0038): a facility-layout site code (1-32
+	// characters, no whitespace) declares that site's standard. Absent (or
+	// empty) declares the site-less standard that applies to every site,
+	// exactly as before.
+	SiteCode string `json:"siteCode,omitempty"`
 }
 
 // teamLiftRequest is the declared heavy-case team-lift rule of a CASE
@@ -56,6 +61,9 @@ type standardResponse struct {
 	// standard, so its body is byte-for-byte what it was before ADR 0035.
 	HandlingUnit string            `json:"handlingUnit,omitempty"`
 	TeamLift     *teamLiftResponse `json:"teamLift,omitempty"`
+	// SiteCode is omitted entirely for a site-less standard, so its body is
+	// byte-for-byte what it was before ADR 0038.
+	SiteCode string `json:"siteCode,omitempty"`
 }
 
 // taskTypeBreakdownResponse is one TaskType's slice of a

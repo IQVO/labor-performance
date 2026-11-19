@@ -18,14 +18,16 @@ info:
       a transactional outbox and drained onto Kafka by the relay inside
       `cmd/labor`; `EVENT_PUBLISHER=log` is rejected at boot.
     - **Outbound integration (`warehouse.labor-performance.events`)** — this
-      service's first Open-Host-Service topic for OTHER bounded contexts
-      (ADR 0013). Before this topic existed, labor-performance was the
-      fleet's only pure event sink: it consumed `TaskCompleted` from
-      fulfillment-execution but published nothing any sibling service could
-      subscribe to. `TaskPerformanceRecorded` is published here so
-      workforce-management (the first intended consumer) can build an
-      event-fed local cache instead of calling this service synchronously
-      over REST. Published through the same transactional outbox relay as
+      service's Open-Host-Service topic for OTHER bounded contexts
+      (ADR 0013, widened by ADR 0038). Before this topic existed,
+      labor-performance was the fleet's only pure event sink: it consumed
+      `TaskCompleted` from fulfillment-execution but published nothing any
+      sibling service could subscribe to. `TaskPerformanceRecorded` is
+      published here so workforce-management (the first consumer) can build
+      an event-fed local cache instead of calling this service synchronously
+      over REST, and `LaborStandardDefined` / `LaborStandardRevised` (ADR
+      0038) so warehouse-planning can keep a local copy of the engineered
+      standards. Published through the same transactional outbox relay as
       the analytics stream (not opt-in).
 
     The three are deliberately separate topics so the integration contracts
@@ -173,9 +175,11 @@ channels:
         `urn:warehouse:labor-performance:analytics:<EventName>:v1`. The
         message key is the TaskType, so every event folding into one report
         dimension lands on a single partition and is applied in publish
-        order. The CloudEvents `id` is the projector's de-duplication key. These
-        events are consumed only by this repo's own projector today; no
-        other service subscribes.
+        order. The CloudEvents `id` is the projector's de-duplication key.
+        This topic is consumed only by this repo's own projector; the
+        standard events and TaskPerformanceRecorded are ALSO published on
+        the integration topic `warehouse.labor-performance.events` for other
+        contexts (ADR 0013, ADR 0038).
       tags:
         - name: labor-performance
       message:
@@ -216,16 +220,21 @@ channels:
       transactional outbox relay; the log publisher is rejected at boot.
       The first consumer is workforce-management, whose event-fed local cache
       (`laborperformancecache`) already consumes this topic in place of a
-      synchronous HTTP call.
+      synchronous HTTP call; warehouse-planning (its ADR 0022) keeps a local
+      copy of the standards from the two standard events (ADR 0038).
     publish:
       operationId: publishLaborIntegrationEvents
-      summary: Publish TaskPerformanceRecorded for other bounded contexts to consume.
+      summary: Publish TaskPerformanceRecorded and the standard events for other bounded contexts to consume.
       description: >-
-        Emits TaskPerformanceRecorded onto the integration topic as a
-        CloudEvents 1.0 event, type
+        Emits three types onto the integration topic as CloudEvents 1.0
+        events whose `dataschema` is
+        `urn:warehouse:labor-performance:events:<EventName>:v1`. The
+        CloudEvents `id` is the consumer's de-duplication key; consumers
+        dispatch on the full `type` and ignore unknown types.
+
+
+        `TaskPerformanceRecorded` (ADR 0013): type
         `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`,
-        dataschema
-        `urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1`,
         subject = the associate id (the task id when there is no
         associate, since `subject` is never empty). The message
         key is the AssociateId — NOT the TaskType the analytics topic keys
@@ -233,15 +242,21 @@ channels:
         and is applied in publish order, which is what a per-associate
         read-cache consumer needs. A task with no checked-in associate
         (e.g. a robot station) is keyed on the empty string.
-        The CloudEvents `id` is the consumer's de-duplication key.
 
-        Only `TaskPerformanceRecorded` is part of this contract today.
-        `LaborStandardDefined`/`LaborStandardRevised` remain analytics-only;
-        widening this topic to carry them is a future, additive change.
+
+        `LaborStandardDefined` / `LaborStandardRevised` (ADR 0038): the same
+        `type` as on the analytics topic and the SAME `data` (field names and
+        types unchanged), subject = the standard id, message key = the
+        TaskType, so every revision of one task type stays in order. A
+        consumer keeping a local copy applies them in publish order per
+        task type.
       tags:
         - name: labor-performance
       message:
-        $ref: "#/components/messages/TaskPerformanceRecordedIntegration"
+        oneOf:
+          - $ref: "#/components/messages/TaskPerformanceRecordedIntegration"
+          - $ref: "#/components/messages/LaborStandardDefinedIntegration"
+          - $ref: "#/components/messages/LaborStandardRevisedIntegration"
 
 components:
   messages:
@@ -252,7 +267,9 @@ components:
       description: >-
         Raised when DefineStandard creates the first engineered standard for
         a TaskType. The projector counts it into the (task_type, hour-of-
-        effective_from) rollup row.
+        effective_from) rollup row. The same occurrence is also published on
+        the integration topic with the same data (LaborStandardDefinedIntegration,
+        ADR 0038), under its own CloudEvents id.
       contentType: application/cloudevents+json
       tags:
         - name: labor-performance
@@ -321,7 +338,9 @@ components:
         an active standard. History is append-only — the prior standard is
         closed, never overwritten (ADR 0004). A bucket with a non-zero
         revision count is one whose efficiency figures span two different
-        yardsticks and are not directly comparable across the boundary.
+        yardsticks and are not directly comparable across the boundary. The
+        same occurrence is also published on the integration topic with the
+        same data (LaborStandardRevisedIntegration, ADR 0038).
       contentType: application/cloudevents+json
       tags:
         - name: labor-performance
@@ -505,6 +524,98 @@ components:
               handling_unit: CASE
               team_lift: true
 
+    LaborStandardDefinedIntegration:
+      name: LaborStandardDefined
+      title: Labor Standard Defined (integration)
+      summary: >-
+        A standard was defined where none was open for its scope —
+        published for other bounded contexts (ADR 0038).
+      description: >-
+        The SAME domain event as the analytics stream's LaborStandardDefined
+        message, with the SAME `data` (field names and types unchanged), on
+        the integration topic and with the `:events:` dataschema. Subject is
+        the standard id; the partition key is the TaskType, so every
+        revision of one task type stays in order. A consumer (e.g.
+        warehouse-planning, which keeps a local copy of the standards)
+        treats the optional fields as optional: messages produced before an
+        additive field existed simply do not carry it.
+      contentType: application/cloudevents+json
+      tags:
+        - name: labor-performance
+      payload:
+        $ref: "#/components/schemas/LaborStandardDefinedEventsCloudEvent"
+      examples:
+        - name: firstPickStandardIntegration
+          summary: The first PICK standard, 45 seconds, on the integration topic.
+          payload:
+            specversion: "1.0"
+            id: 4e2b7f35-a6d8-4c19-8b0e-5f1c3d7a9b62
+            source: /warehouse/labor-performance
+            type: com.warehouse.wes.labor-performance.standard.LaborStandardDefined
+            subject: std-0001
+            time: "2026-09-05T09:00:00Z"
+            datacontenttype: application/json
+            dataschema: "urn:warehouse:labor-performance:events:LaborStandardDefined:v1"
+            data:
+              standard_id: std-0001
+              task_type: PICK
+              expected_seconds: 45
+              effective_from: "2026-09-05T09:00:00Z"
+        - name: casePickStandardWithTeamLiftIntegration
+          summary: A CASE pick standard (ADR 0035) declaring a heavy-case team lift, on the integration topic.
+          payload:
+            specversion: "1.0"
+            id: 5f3c8a46-b7e9-4d2a-9c1f-6a2d4e8b0c73
+            source: /warehouse/labor-performance
+            type: com.warehouse.wes.labor-performance.standard.LaborStandardDefined
+            subject: std-0004
+            time: "2026-10-24T08:00:00Z"
+            datacontenttype: application/json
+            dataschema: "urn:warehouse:labor-performance:events:LaborStandardDefined:v1"
+            data:
+              standard_id: std-0004
+              task_type: PICK
+              expected_seconds: 30
+              effective_from: "2026-10-24T08:00:00Z"
+              handling_unit: CASE
+              team_lift_threshold_g: 18000
+              team_lift_expected_seconds: 75
+
+    LaborStandardRevisedIntegration:
+      name: LaborStandardRevised
+      title: Labor Standard Revised (integration)
+      summary: >-
+        An open standard was closed and a new one started in its place —
+        published for other bounded contexts (ADR 0038).
+      description: >-
+        The SAME domain event as the analytics stream's LaborStandardRevised
+        message, with the SAME `data`, on the integration topic and with the
+        `:events:` dataschema. `standard_id` is the NEW record; the closed
+        one is never overwritten (append-only history, ADR 0004). Subject is
+        the new standard id; the partition key is the TaskType.
+      contentType: application/cloudevents+json
+      tags:
+        - name: labor-performance
+      payload:
+        $ref: "#/components/schemas/LaborStandardRevisedEventsCloudEvent"
+      examples:
+        - name: tightenPickStandardIntegration
+          summary: The PICK standard tightened from 45s to 40s, on the integration topic.
+          payload:
+            specversion: "1.0"
+            id: 6a4d9b57-c8fa-4e3b-8d20-7b3e5f9c1d84
+            source: /warehouse/labor-performance
+            type: com.warehouse.wes.labor-performance.standard.LaborStandardRevised
+            subject: std-0002
+            time: "2026-09-05T10:00:00Z"
+            datacontenttype: application/json
+            dataschema: "urn:warehouse:labor-performance:events:LaborStandardRevised:v1"
+            data:
+              standard_id: std-0002
+              task_type: PICK
+              previous_expected_seconds: 45
+              expected_seconds: 40
+              effective_from: "2026-09-05T10:00:00Z"
 
     TaskCompleted:
       name: TaskCompleted
@@ -721,6 +832,40 @@ components:
             data:
               $ref: "#/components/schemas/TaskPerformanceRecordedEventsData"
 
+    LaborStandardDefinedEventsCloudEvent:
+      title: CloudEvent + LaborStandardDefined data (integration stream)
+      description: >-
+        ADR 0038. Same `type` and same `data` schema as the analytics
+        stream's LaborStandardDefinedCloudEvent; only the dataschema stream
+        segment differs.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type:
+              const: com.warehouse.wes.labor-performance.standard.LaborStandardDefined
+            dataschema:
+              const: "urn:warehouse:labor-performance:events:LaborStandardDefined:v1"
+            data:
+              $ref: "#/components/schemas/LaborStandardDefinedData"
+
+    LaborStandardRevisedEventsCloudEvent:
+      title: CloudEvent + LaborStandardRevised data (integration stream)
+      description: >-
+        ADR 0038. Same `type` and same `data` schema as the analytics
+        stream's LaborStandardRevisedCloudEvent; only the dataschema stream
+        segment differs.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventEnvelope"
+        - type: object
+          properties:
+            type:
+              const: com.warehouse.wes.labor-performance.standard.LaborStandardRevised
+            dataschema:
+              const: "urn:warehouse:labor-performance:events:LaborStandardRevised:v1"
+            data:
+              $ref: "#/components/schemas/LaborStandardRevisedData"
+
     TaskCompletedData:
       type: object
       required:
@@ -865,6 +1010,19 @@ components:
             elapsed seconds of a team lift. Present only together with
             team_lift_threshold_g.
           example: 75
+        site_code:
+          type: string
+          minLength: 1
+          maxLength: 32
+          pattern: '^\S+$'
+          description: >-
+            ADDITIVE (ADR 0038). Present only when the standard is scoped to
+            one site (a facility-layout site code, 1-32 characters, no
+            whitespace); omitted entirely (not null, not "") for a site-less
+            standard, which applies to every site. At most one standard is
+            open per (task_type, handling_unit, site_code). Scoring in this
+            service never resolves a site-scoped standard.
+          example: SITE-GRU-01
         effective_from:
           type: string
           format: date-time
@@ -940,6 +1098,18 @@ components:
             elapsed seconds of a team lift. Present only together with
             team_lift_threshold_g.
           example: 75
+        site_code:
+          type: string
+          minLength: 1
+          maxLength: 32
+          pattern: '^\S+$'
+          description: >-
+            ADDITIVE (ADR 0038). The site of the NEW standard, which is
+            always the site of the closed prior one (a revision closes only
+            the same (task_type, handling_unit, site_code)). Present only for
+            a site-scoped standard; omitted entirely (not null, not "") for
+            a site-less one.
+          example: SITE-GRU-01
         effective_from:
           type: string
           format: date-time

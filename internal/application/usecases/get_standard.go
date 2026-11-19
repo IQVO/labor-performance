@@ -43,3 +43,23 @@ func (uc *GetStandard) ExecuteResolved(ctx context.Context, taskType shared.Task
 	}
 	return uc.Execute(ctx, taskType)
 }
+
+// ExecuteForSite returns the open standard of EXACTLY (taskType, unit,
+// site) (ADR 0038): a site's standard is read as declared, with no
+// fallback to the site-less standard or to the task-type-only one —
+// precedence between a site's standard and the site-less one is the
+// consumer's rule, not this read's. ErrStandardNotFound when that scope has
+// no open standard. site "" is ExecuteResolved.
+func (uc *GetStandard) ExecuteForSite(ctx context.Context, taskType shared.TaskType, unit shared.HandlingUnit, site shared.SiteCode) (*standard.LaborStandard, error) {
+	if site == "" {
+		return uc.ExecuteResolved(ctx, taskType, unit)
+	}
+	s, err := uc.Standards.FindCurrentlyActiveForScope(ctx, standard.Scope{TaskType: taskType, HandlingUnit: unit, SiteCode: site})
+	if err != nil {
+		return nil, err
+	}
+	if s == nil {
+		return nil, ErrStandardNotFound
+	}
+	return s, nil
+}

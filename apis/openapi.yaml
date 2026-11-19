@@ -109,6 +109,16 @@ paths:
         `teamLift` (ADR 0035).
 
 
+        A standard may optionally be scoped to one site (`siteCode`, a
+        facility-layout site code, ADR 0038). Absent means the site-less
+        standard that applies to every site, exactly as before. At most one
+        standard is open per (taskType, handlingUnit, siteCode): a site's
+        standard never closes the site-less one, nor the reverse, and
+        revising it closes only the prior standard of the same site. Scoring
+        is unchanged: completed tasks are still scored against site-less
+        standards only.
+
+
         Idempotent retries: clients MUST always send an `Idempotency-Key`
         header (1-128 printable ASCII characters, a client-generated UUID
         per logical submit); a retried request with the same key, method,
@@ -145,6 +155,12 @@ paths:
                   teamLift:
                     thresholdG: 18000
                     expectedSeconds: 75
+              siteStandard:
+                summary: A PICK standard scoped to one site (ADR 0038)
+                value:
+                  taskType: PICK
+                  siteCode: SITE-GRU-01
+                  expectedSeconds: 40
       responses:
         "201":
           description: Standard defined (or the revision recorded)
@@ -158,7 +174,9 @@ paths:
         "400":
           description: >
             Unknown task type (including an absent or empty `taskType`),
-            unknown handling unit (not EACH, CASE or PALLET), a body that is
+            unknown handling unit (not EACH, CASE or PALLET), a `siteCode`
+            longer than 32 characters or containing whitespace
+            (invalid-site-code), a body that is
             not valid JSON or contains a NUL character
             (malformed-request-body), a missing Idempotency-Key header
             (idempotency-key-required), or an Idempotency-Key that is not
@@ -174,7 +192,7 @@ paths:
             concurrency race: another writer modified the same labor
             standard after this request's snapshot
             (concurrent-modification), or another standard is already open
-            for this task type and handling unit (standard-conflict).
+            for this task type, handling unit and site (standard-conflict).
             Re-fetch and retry; never retry an idempotency-key-reused with
             the same key.
           content:
@@ -212,9 +230,18 @@ paths:
         task-type-only standard (most specific wins, ADR 0035). The
         returned body's own `handlingUnit` says which of the two answered
         (absent = the task-type-only one).
+
+
+        Without `siteCode` the answer is always a site-less standard,
+        exactly as before. With `siteCode` the answer is the open standard
+        of EXACTLY (taskType, handlingUnit or none, siteCode), with no
+        fallback to the site-less standard or to the task-type-only one, and
+        404 when that site has none (ADR 0038). Which of a site's standard
+        and the site-less one a consumer prefers is the consumer's rule.
       parameters:
         - $ref: "#/components/parameters/TaskTypePathParam"
         - $ref: "#/components/parameters/HandlingUnitQueryParam"
+        - $ref: "#/components/parameters/SiteCodeQueryParam"
       responses:
         "200":
           description: The currently-active (resolved) standard
@@ -240,14 +267,25 @@ paths:
                     taskType: PICK
                     expectedSeconds: 45
                     effectiveFrom: "2026-10-24T08:00:00Z"
+                siteStandard:
+                  summary: ?siteCode=SITE-GRU-01 reads that site's standard exactly
+                  value:
+                    taskType: PICK
+                    siteCode: SITE-GRU-01
+                    expectedSeconds: 40
+                    effectiveFrom: "2026-11-18T08:00:00Z"
         "400":
-          description: Unknown task type or unknown handling unit
+          description: >-
+            Unknown task type, unknown handling unit, or a siteCode longer
+            than 32 characters or containing whitespace (invalid-site-code)
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
         "404":
-          description: No active standard for this task type
+          description: >-
+            No active standard for this task type (or, with siteCode, none
+            for exactly that site)
           content:
             application/problem+json:
               schema:
@@ -418,6 +456,17 @@ components:
         one). Absent or empty means the task-type-only standard.
       schema:
         $ref: "#/components/schemas/HandlingUnit"
+    SiteCodeQueryParam:
+      name: siteCode
+      in: query
+      required: false
+      description: >
+        A site code (1-32 characters, no whitespace; ADR 0038). Reads the
+        open standard of exactly that site, 404 when it has none; never
+        falls back to the site-less standard. Absent or empty means the
+        site-less standard, as before.
+      schema:
+        $ref: "#/components/schemas/SiteCode"
     WindowQueryParam:
       name: window
       in: query
@@ -450,6 +499,17 @@ components:
         The packaging level a standard is declared for, and that a completed
         task handled (ADR 0035). INNER is deliberately absent: no flow
         implements it in v1.
+    SiteCode:
+      type: string
+      minLength: 1
+      maxLength: 32
+      pattern: '^\S+$'
+      description: >-
+        The facility (facility-layout site code) a standard is scoped to
+        (ADR 0038): 1-32 characters, no whitespace. Absent means the
+        site-less standard that applies to every site. Declarative input:
+        this service never looks a site up in a sibling context.
+      example: SITE-GRU-01
     TeamLiftRequest:
       type: object
       required: [thresholdG, expectedSeconds]
@@ -506,6 +566,8 @@ components:
           example: 15
         teamLift:
           $ref: "#/components/schemas/TeamLiftRequest"
+        siteCode:
+          $ref: "#/components/schemas/SiteCode"
     Standard:
       type: object
       required: [taskType, expectedSeconds, effectiveFrom]
@@ -514,6 +576,8 @@ components:
           $ref: "#/components/schemas/TaskType"
         handlingUnit:
           $ref: "#/components/schemas/HandlingUnit"
+        siteCode:
+          $ref: "#/components/schemas/SiteCode"
         expectedSeconds:
           type: integer
           format: int64
