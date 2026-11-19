@@ -90,15 +90,18 @@ flowchart LR
     subgraph OUT["Outbound - whom it calls or notifies"]
         direction TB
         out0["workforce-management"]:::ctx
+        out3["warehouse-planning"]:::ctx
         out1["own cmd/labor-projector"]:::self
         out2["operations (dead letter,<br/>no consumer)"]:::self
     end
     BC ==>|"evt - Kafka<br/>warehouse.labor-performance.events<br/>TaskPerformanceRecorded"| out0
     BC ==>|"evt - Kafka<br/>warehouse.labor-performance.analytics<br/>LaborStandardDefined,<br/>LaborStandardRevised,<br/>TaskPerformanceRecorded"| out1
     BC ==>|"evt - Kafka<br/>warehouse.fulfillment.events.dlq<br/>undecodable or repeatedly<br/>failing TaskCompleted"| out2
+    BC ==>|"evt - Kafka<br/>warehouse.labor-performance.events<br/>LaborStandardDefined,<br/>LaborStandardRevised"| out3
     linkStyle 0 stroke:#e8590c,stroke-width:2.5px
     linkStyle 1 stroke:#e8590c,stroke-width:2.5px
     linkStyle 2 stroke:#e8590c,stroke-width:2.5px
+    linkStyle 3 stroke:#e8590c,stroke-width:2.5px
 ```
 
 Source: the Inbound Communication and Outbound Communication tables of this
@@ -165,6 +168,8 @@ analytical report — without ever influencing how the work is executed.
 | Collaborator | Message | Type | Channel | Relationship |
 |---|---|---|---|---|
 | `workforce-management` | `TaskPerformanceRecorded` | Event | Kafka `warehouse.labor-performance.events`, CE type `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`, key `associate_id` | OHS + Published Language; WFM is Conformist |
+| `warehouse-planning` | `LaborStandardDefined` | Event | Kafka `warehouse.labor-performance.events`, CE type `com.warehouse.wes.labor-performance.standard.LaborStandardDefined`, key `task_type` (ADR 0038) | OHS + Published Language; warehouse-planning is Conformist |
+| `warehouse-planning` | `LaborStandardRevised` | Event | Kafka `warehouse.labor-performance.events`, CE type `com.warehouse.wes.labor-performance.standard.LaborStandardRevised`, key `task_type` (ADR 0038) | OHS + Published Language; warehouse-planning is Conformist |
 | own `cmd/labor-projector` | `LaborStandardDefined` | Event | Kafka `warehouse.labor-performance.analytics`, CE type `com.warehouse.wes.labor-performance.standard.LaborStandardDefined`, key `task_type` | internal |
 | own `cmd/labor-projector` | `LaborStandardRevised` | Event | Kafka `warehouse.labor-performance.analytics`, CE type `com.warehouse.wes.labor-performance.standard.LaborStandardRevised`, key `task_type` | internal |
 | own `cmd/labor-projector` | `TaskPerformanceRecorded` | Event | Kafka `warehouse.labor-performance.analytics`, CE type `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`, key `task_type` | internal |

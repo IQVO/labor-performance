@@ -64,9 +64,11 @@ All REST errors are RFC 7807 `application/problem+json` bodies with
 | 409 `idempotency-key-reused` | The same key was sent with a **different** method, path or body (the fingerprint is method + path + SHA-256 of the body, and the key is global). Nothing was executed. Distinguish it from the business 409s by the problem type. | Use a new key for a genuinely new request. Never retry blindly with the same key. |
 | A retry returns exactly the first response again, even a 4xx | Same key and same request: the stored outcome is replayed, with the response header `Idempotency-Replayed: true`. Every 2xx and 4xx outcome is cached for `IDEMPOTENCY_KEY_TTL`; a 5xx or a panic rolls back and is **not** stored, so its retry executes again. | Expected. To try again with different values, use a new key. |
 | 409 `concurrent-modification` | Two `DefineStandard` calls raced on the same prior standard, and the optimistic `version` check lost ([ADR 0022](../adr/0022-optimistic-concurrency-one-open-standard.md)). | Re-read with `GET /standards/{taskType}` and retry with a new key. |
-| 409 `standard-conflict` | The unique "one open standard per task type" index (23505) rejected a second open standard. | Same as above. |
+| 409 `standard-conflict` | The unique "one open standard per task type, handling unit and site" index (23505) rejected a second open standard. | Same as above. |
 | 422 `non-positive-expected-seconds`, `negative-travel-component-seconds`, `travel-component-exceeds-expected-seconds` | The `LaborStandard` invariants rejected the values. These also count as `outcome=rejected` on the metric. | Fix the payload. |
 | 400 `unknown-task-type` | The task type is not PICK, PACK or SLAM (path or body). Matching is case-sensitive. | Use the upper-case enum. |
+| 400 `invalid-site-code` | The `siteCode` (body of `POST /standards` or the `GET /standards/{taskType}` query) is longer than 32 characters or contains whitespace ([ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md)). | Send the facility's site code as is, or omit it for the site-less standard. |
+| 404 `standard-not-found` with `?siteCode=` | That site has no standard of its own. The site lookup never falls back to the site-less standard. | Read without `siteCode`, or define the site's standard. |
 | 400 `malformed-request-body` | The body is not valid JSON, or it contains a NUL (U+0000, raw or `\u0000`), which Postgres text cannot store. The key is not consumed. | Fix the client. |
 | 404 `resource-not-found` on a path with `%00` | A NUL in the path is rejected before routing. | Fix the client. |
 | 404 `associate-not-found` | The service has never recorded a task for that associate, or the id is empty. | Check that ingestion works (see Kafka above). |
@@ -96,6 +98,7 @@ MCP calls, so nothing can trip one.
 | `concurrent-modification` | 409 | `StandardRepo.Save` version check |
 | `standard-conflict` | 409 | One-open-standard unique index |
 | `unknown-task-type` | 400 | `shared.NewTaskType` |
+| `invalid-site-code` | 400 | `shared.NewSiteCode` (ADR 0038) |
 | `empty-event-id`, `empty-task-id` | 400 | `performance.New`. Mapped for completeness, but only reachable from the Kafka path, which never writes HTTP. |
 | `non-positive-expected-seconds`, `negative-travel-component-seconds`, `travel-component-exceeds-expected-seconds` | 422 | `standard.New` |
 | `malformed-request-body` | 400 | JSON decode, or body read in the idempotency middleware |

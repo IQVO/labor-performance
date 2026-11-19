@@ -41,12 +41,15 @@ log-only mode ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md
 | | |
 |---|---|
 | CE type | `com.warehouse.wes.labor-performance.standard.LaborStandardDefined` |
-| Topic | `warehouse.labor-performance.analytics` only |
-| Partition key | `task_type` |
+| Topic | `warehouse.labor-performance.analytics` **and** `warehouse.labor-performance.events` (since [ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md)) |
+| Partition key | `task_type` (both topics) |
 | `subject` | the new `standard_id` |
-| `dataschema` | `urn:warehouse:labor-performance:analytics:LaborStandardDefined:v1` |
-| Producer | `DefineStandard` when no standard was open for the task type |
-| Consumers | this repo's `cmd/labor-projector` (counts `standards_defined`) |
+| `dataschema` | `urn:warehouse:labor-performance:analytics:LaborStandardDefined:v1` on the analytics topic, `urn:warehouse:labor-performance:events:LaborStandardDefined:v1` on the integration topic |
+| Producer | `DefineStandard` when no standard was open for the scope (task type, handling unit, site) |
+| Consumers | this repo's `cmd/labor-projector` (analytics; counts `standards_defined`); `warehouse-planning` (integration; keeps a local copy of the standards, ADR 0038) |
+
+Both copies carry the same `data`, but each is a separate CloudEvent with
+its own `id`:
 
 | Field | Type | Notes |
 |---|---|---|
@@ -58,18 +61,19 @@ log-only mode ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md
 | `handling_unit` | string | `EACH`, `CASE` or `PALLET`; **omitted** for a task-type-only standard (ADR 0035) |
 | `team_lift_threshold_g` | integer | CASE standards only; the weight in grams above which a case needs a team lift; **omitted** when none |
 | `team_lift_expected_seconds` | integer | CASE standards only; the team-lift standard time; present only with `team_lift_threshold_g` |
+| `site_code` | string | additive (ADR 0038); 1-32 characters, no whitespace; **omitted** for a site-less standard (every site) |
 
 ### LaborStandardRevised
 
 | | |
 |---|---|
 | CE type | `com.warehouse.wes.labor-performance.standard.LaborStandardRevised` |
-| Topic | `warehouse.labor-performance.analytics` only |
-| Partition key | `task_type` |
+| Topic | `warehouse.labor-performance.analytics` **and** `warehouse.labor-performance.events` (since ADR 0038) |
+| Partition key | `task_type` (both topics) |
 | `subject` | the new `standard_id` |
-| `dataschema` | `urn:warehouse:labor-performance:analytics:LaborStandardRevised:v1` |
-| Producer | `DefineStandard` when an open standard was closed |
-| Consumers | this repo's `cmd/labor-projector` (counts `standards_revised`) |
+| `dataschema` | `urn:warehouse:labor-performance:analytics:LaborStandardRevised:v1` on the analytics topic, `urn:warehouse:labor-performance:events:LaborStandardRevised:v1` on the integration topic |
+| Producer | `DefineStandard` when an open standard of the same scope was closed |
+| Consumers | this repo's `cmd/labor-projector` (analytics; counts `standards_revised`); `warehouse-planning` (integration) |
 
 | Field | Type | Notes |
 |---|---|---|
@@ -79,7 +83,8 @@ log-only mode ([ADR 0034](../adr/0034-postgres-and-kafka-are-the-only-runtime.md
 | `expected_seconds` | integer | the new value (`NewExpectedSeconds` in Go) |
 | `effective_from` | RFC 3339 timestamp | also the instant the prior standard closed |
 | `travel_component_seconds` | integer | the new standard's value; omitted when none |
-| `handling_unit`, `team_lift_threshold_g`, `team_lift_expected_seconds` | string, integer, integer | the new standard's values, omitted when none (ADR 0035); a revision closes only the standard of the same task type and handling unit |
+| `handling_unit`, `team_lift_threshold_g`, `team_lift_expected_seconds` | string, integer, integer | the new standard's values, omitted when none (ADR 0035) |
+| `site_code` | string | the new (and closed) standard's site, omitted when site-less (ADR 0038); a revision closes only the standard of the same task type, handling unit and site |
 
 ### TaskPerformanceRecorded (analytics)
 

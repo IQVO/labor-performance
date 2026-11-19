@@ -20,6 +20,7 @@ flowchart LR
   FEX["fulfillment-execution"] -- "Kafka warehouse.fulfillment.events<br/>TaskCompleted" --> LP["labor-performance"]
   OP["operator / labor_mfe"] -- "REST POST /standards" --> LP
   LP -- "Kafka warehouse.labor-performance.events<br/>TaskPerformanceRecorded" --> WFM["workforce-management"]
+  LP -- "Kafka warehouse.labor-performance.events<br/>LaborStandardDefined / LaborStandardRevised" --> WP["warehouse-planning"]
   LP -- "Kafka warehouse.labor-performance.analytics<br/>3 event types" --> PROJ["labor-projector (same repo)"]
   AG["warehouse-ops-agent"] -- "MCP get_* tools" --> LP
   AG -- "REST GET /reports/performance" --> REP["labor-reports (same repo)"]
@@ -48,7 +49,10 @@ Absent upstreams, on purpose:
   The same holds for the optional handling unit and heavy-case team lift of a
   standard ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)):
   declared through `POST /standards`, never read from `product-master` or any
-  other context.
+  other context. The optional `siteCode` of a standard
+  ([ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md))
+  is likewise declared by the caller and never resolved or validated against
+  `facility-layout`.
 - **No dependency on `workforce-management`** (shifts, paths) **or on
   `process-path-management`.** The fleet bans REST and MCP calls from
   this context to siblings.
@@ -57,7 +61,8 @@ Absent upstreams, on purpose:
 
 | Downstream | Protocol | Contract | What it does with it | Failure behaviour |
 | --- | --- | --- | --- | --- |
-| `workforce-management` | Kafka | Topic `warehouse.labor-performance.events`, type `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`, `dataschema` `urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1`, key `AssociateId` ([ADR 0013](../adr/0013-labor-performance-integration-events.md)) | Builds a measured-rate and idle-share cache (`internal/adapters/outbound/laborperformancecache` in that repo, group prefix `workforce-management-labor-performance-cache`). | Fed only when `EVENT_PUBLISHER=kafka`. With the outbox, events wait in `outbox_events` while the broker is down and are delivered later at least once, with a stable CloudEvents `id`. |
+| `workforce-management` | Kafka | Topic `warehouse.labor-performance.events`, type `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`, `dataschema` `urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1`, key `AssociateId` ([ADR 0013](../adr/0013-labor-performance-integration-events.md)) | Builds a measured-rate and idle-share cache (`internal/adapters/outbound/laborperformancecache` in that repo, group prefix `workforce-management-labor-performance-cache`). It ignores the other types on the topic. | Fed only when `EVENT_PUBLISHER=kafka`. With the outbox, events wait in `outbox_events` while the broker is down and are delivered later at least once, with a stable CloudEvents `id`. |
+| `warehouse-planning` | Kafka | Topic `warehouse.labor-performance.events`, types `com.warehouse.wes.labor-performance.standard.LaborStandardDefined` and `com.warehouse.wes.labor-performance.standard.LaborStandardRevised`, `dataschema` `urn:warehouse:labor-performance:events:<EventName>:v1`, key `TaskType`, `subject` the new `StandardId` ([ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md)) | Keeps a local copy of the standards (its ADR 0022), per site when `site_code` is present. | Same outbox guarantees. Ordering holds per task type, so a task type's revisions arrive in order. |
 | `labor-projector` (this repo) | Kafka | Topic `warehouse.labor-performance.analytics`: `com.warehouse.wes.labor-performance.standard.LaborStandardDefined`, `com.warehouse.wes.labor-performance.standard.LaborStandardRevised`, `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`, with `dataschema` `urn:warehouse:labor-performance:analytics:<EventName>:v1` and key `TaskType` | Rollup in the analytical database ([ADR 0007](../adr/0007-analytical-data-product.md)). | Same outbox guarantees. The projector retries transient errors forever and skips bad input. |
 | `warehouse-ops-agent` | MCP (Streamable HTTP) | `get_associate_scorecard`, `get_task_type_performance`, `get_labor_standard`, `get_task_type_utilization` ([MCP tools](../mcp/tools.md)) | Its `FlowBalanceAdvisory` overlays `get_task_type_utilization` on rebalance recommendations. It is configured on its side through `LABOR_PERFORMANCE_MCP_ENDPOINT`. | On the agent's side, a missing or unreachable endpoint skips the utilization overlay. Nothing on this side depends on it. |
 | `warehouse-ops-agent` | REST (reports) | `GET /reports/performance`, `GET /reports/performance/freshness` (`apis/openapi-reports.yaml`) | Console report section "Labor Performance (Efficiency %)", configured through `LABOR_PERFORMANCE_REPORTS_REST_URL` on its side. | The agent degrades only that section ("labor-performance reports not available"). |
@@ -82,11 +87,13 @@ verification. That is a test harness, not a runtime consumer.
 | `handling_unit` | `EACH`, `CASE` or `PALLET` | Additive ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)). Present only when the completion carried a handling unit; omitted otherwise. |
 | `team_lift` | boolean | Additive. Present only with `handling_unit`: `true` when the CASE team-lift time scored the completion. |
 
-`LaborStandardDefined` / `LaborStandardRevised` (analytics topic only)
-carry `standard_id`, `task_type`, `expected_seconds`, `effective_from`,
+`LaborStandardDefined` / `LaborStandardRevised` (both topics since
+[ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md),
+the same `data` on each) carry `standard_id`, `task_type`, `expected_seconds`, `effective_from`,
 an optional `travel_component_seconds`, the additive `handling_unit`,
 `team_lift_threshold_g` and `team_lift_expected_seconds` (only when
-declared, ADR 0035), and on revisions `previous_expected_seconds`. The `subject` is the `StandardId`. Field
+declared, ADR 0035), the additive `site_code` (only for a site-scoped
+standard, ADR 0038), and on revisions `previous_expected_seconds`. The `subject` is the `StandardId`. Field
 definitions are in [Domain events](../ddd/domain-events.md) and
 `apis/asyncapi.yaml`.
 
@@ -100,5 +107,6 @@ definitions are in [Domain events](../ddd/domain-events.md) and
 - Payload changes are additive. `idle_seconds_before` was added without
   a version bump, and `workforce-management`'s consumer tolerates unknown
   fields. A breaking change needs a new `dataschema` version.
-- Ordering holds only per partition key: `AssociateId` on `.events`,
-  `TaskType` on `.analytics`.
+- Ordering holds only per partition key: `AssociateId` for
+  `TaskPerformanceRecorded` on `.events`, `TaskType` for the standard events
+  on `.events` and for everything on `.analytics`.

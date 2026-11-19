@@ -9,7 +9,7 @@ description: Labor Performance's relationships — a Conformist Kafka customer o
 Labor Performance has exactly **one** input: it is a pure Kafka
 **Customer** of `fulfillment-execution`'s already-published
 `TaskCompleted` integration event. Everything else points the other way —
-it publishes its own integration event and exposes its own REST, reports
+it publishes its own integration events and exposes its own REST, reports
 and MCP surfaces that other contexts read. It has **no outbound REST or
 MCP client** to any sibling context (ADR 0003, restated for
 facility-layout by ADR 0015): nothing under `internal/adapters/outbound/`
@@ -33,6 +33,7 @@ flowchart LR
 
     FE -->|"U: OHS + PL / D: CF<br/>Kafka warehouse.fulfillment.events<br/>com.warehouse.wes.fulfillment-execution.task.TaskCompleted"| LP
     LP -->|"U: OHS + PL / D: CF<br/>Kafka warehouse.labor-performance.events<br/>com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded"| WFM
+    LP -->|"U: OHS + PL / D: CF<br/>Kafka warehouse.labor-performance.events<br/>standard.LaborStandardDefined / LaborStandardRevised"| WP["warehouse-planning<br/>local copy of the standards"]
     LP -.->|"U: OHS / D: CF<br/>REST GET /task-types/taskType/performance<br/>wired, only in LABOR_PERFORMANCE_MODE=http"| WFM
     LP -->|"U: OHS / D: CF<br/>REST OLTP via labor_mfe, REST reports API"| CONSOLE
     LP -->|"U: OHS / D: CF<br/>MCP 4 read tools, REST reports API"| AGENT
@@ -68,9 +69,10 @@ direction of a call this service makes — it makes none.
 | `fulfillment-execution` | U → this (D) | Upstream OHS + Published Language; this context Conformist (Customer/Supplier with no influence) | Kafka `warehouse.fulfillment.events`, CE type `com.warehouse.wes.fulfillment-execution.task.TaskCompleted`, group `labor-performance` (`KAFKA_CONSUMER_GROUP`) | **Live** | this repo: `internal/adapters/inbound/kafka/consumer.go` (`handleFulfillmentEvent`), `cloudevents.TypeFulfillmentTaskCompleted` |
 | `workforce-management` | this (U) → D | OHS + Published Language upstream; WFM Conformist (builds a local cache, ADR 0013) | Kafka `warehouse.labor-performance.events`, CE type `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`, key `associate_id` | **Live** | this repo: `internal/adapters/outbound/kafka/integration_publisher.go`; WFM: `internal/adapters/outbound/laborperformancecache/consumer.go` (`LABOR_PERFORMANCE_MODE=kafka-cache`) |
 | `workforce-management` | this (U) → D | OHS (REST read) / CF | REST `GET /task-types/{taskType}/performance` (`meanActualSeconds`) | **Wired, not default** — WFM's `LABOR_PERFORMANCE_MODE` defaults to `permissive` | WFM: `internal/adapters/outbound/laborperformance/client.go`, `cmd/workforce/main.go` |
+| `warehouse-planning` | this (U) → D | OHS + Published Language upstream; warehouse-planning Conformist (keeps a local copy of the standards, its ADR 0022) | Kafka `warehouse.labor-performance.events`, CE types `com.warehouse.wes.labor-performance.standard.LaborStandardDefined` and `...LaborStandardRevised`, key `task_type`, optional `site_code` | **Published** (ADR 0038); the consumer lives in warehouse-planning | this repo: `internal/adapters/outbound/kafka/integration_publisher.go` |
 | `warehouse-console` | this (U) → D | OHS / CF | REST (OLTP) via the `labor_mfe` remote: `POST /standards`, `GET /associates/{associateId}/scorecard`, `GET /task-types/{taskType}/performance`; REST (reports): `GET /reports/performance`, `GET /reports/performance/freshness` | **Live** | this repo: `web/src/screens/LaborPerformanceScreen.tsx`; console: `src/App.tsx` (`labor_mfe/App`), `src/features/context-reports/laborPerformance.config.tsx` |
 | `warehouse-ops-agent` | this (U) → D | OHS / CF | MCP (`cmd/mcp`, Streamable HTTP): `get_associate_scorecard`, `get_task_type_performance`, `get_labor_standard`, `get_task_type_utilization`; REST reports: `GET /reports/performance`, `GET /reports/performance/freshness` | **Live** | agent: `internal/adapters/outbound/mcpclient/labor_performance.go`, `internal/adapters/outbound/restclient/reports_clients.go`, `internal/application/usecases/flow_balance_advisory.go` |
-| `facility-layout` | none | **Separate Ways** | — (an optional `travelComponentSeconds` on a standard is supplied by the caller, never looked up) | **Deliberately absent** | ADR 0015; `standard.LaborStandard` doc comment |
+| `facility-layout` | none | **Separate Ways** | — (an optional `travelComponentSeconds` or `siteCode` on a standard is supplied by the caller, never looked up or validated) | **Deliberately absent** | ADR 0015, ADR 0038; `standard.LaborStandard` doc comment |
 | Any sibling over REST/MCP | this → sibling | — | — | **Deliberately absent** | ADR 0003; no outbound HTTP/MCP client package exists |
 
 ## → `fulfillment-execution` (live, inbound Kafka only)
@@ -157,6 +159,19 @@ that calls this service's `GET /task-types/{taskType}/performance`; its
 default mode is `permissive`. Either way the dependency points from
 `workforce-management` to this context — this service has no Go import
 from, REST call to, or Kafka subscription on `workforce-management`.
+
+## → `warehouse-planning` (published, outbound Kafka)
+
+**Strategically: this context is the upstream Supplier; `warehouse-planning`
+is a Conformist Customer.** Since ADR 0038 this service also publishes
+`LaborStandardDefined` and `LaborStandardRevised` onto
+**`warehouse.labor-performance.events`** (partition key = `task_type`,
+`subject` = the new `standard_id`), with exactly the analytics `data`,
+through the same transactional outbox. `warehouse-planning` keeps a local
+copy of the standards from them (its ADR 0022) and never calls this
+service. A standard's optional `site_code` lets it hold a per-site
+standard next to the site-less one; which of the two applies is
+warehouse-planning's rule. Scoring here never uses a site standard.
 
 ## ← `warehouse-console` (the `labor_mfe` remote and the reports page)
 

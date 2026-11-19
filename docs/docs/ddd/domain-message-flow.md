@@ -50,21 +50,28 @@ sequenceDiagram
     participant UI as warehouse-console labor_mfe
     participant LP as labor-performance
     participant PRJ as labor-performance projector
+    participant WP as warehouse-planning
     IE->>UI: enter PICK expectedSeconds 40
     UI->>LP: cmd: POST /standards with Idempotency-Key
     Note over LP: DefineStandard - close open PICK standard, open new one
     LP-->>UI: 201 standard with effectiveFrom
     LP-)PRJ: evt: com.warehouse.wes.labor-performance.standard.LaborStandardRevised on warehouse.labor-performance.analytics
+    LP-)WP: evt: com.warehouse.wes.labor-performance.standard.LaborStandardRevised on warehouse.labor-performance.events
+    Note over WP: updates its local copy of the PICK standard
     Note over LP: later TaskCompleted events with time after effectiveFrom are scored against 40 s
 ```
 
 Source: `web/src/screens/LaborPerformanceScreen.tsx`,
 `internal/adapters/inbound/http/server.go`,
 `internal/adapters/inbound/http/idempotency.go`,
-`internal/application/usecases/define_standard.go`. Omitted: the
+`internal/application/usecases/define_standard.go`,
+`internal/adapters/outbound/kafka/integration_publisher.go`. Omitted: the
 first-definition variant (`LaborStandardDefined`), the 409/422 error
-branches. Standard events are **not** published on the integration
-topic — no sibling receives them.
+branches, and a site-scoped revision (`siteCode`), which closes only that
+site's standard. Since
+[ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md)
+the standard events are also published on the integration topic, with the
+analytics `data`, so `warehouse-planning` can keep a local copy.
 
 ## 3. The ops agent explains a slow task type
 
