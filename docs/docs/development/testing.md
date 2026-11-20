@@ -133,6 +133,12 @@ A separate feature file,
   - idempotency middleware, including concurrent same-key requests:
     `internal/adapters/inbound/http/idempotency_integration_test.go`,
     `idempotency_conflict_integration_test.go`
+  - idempotency replay classes ([ADR 0039](../adr/0039-idempotency-replay-classes.md)):
+    the unit tests in `internal/adapters/inbound/http/replay_class_test.go` (no
+    Docker), the harness template over a real Postgres
+    (`idempotency_replay_classes_integration_test.go` and its wiring file), and
+    `idempotency_retryable_integration_test.go` (the loser's key row is absent and its
+    retry under the same key executes)
   - Kafka consumers and DLQ (real broker), including DLQ topic
     auto-creation: `internal/adapters/inbound/kafka/consumer_integration_test.go`,
     `consumer_dlq_integration_test.go`, `consumer_dlq_autocreate_integration_test.go`,

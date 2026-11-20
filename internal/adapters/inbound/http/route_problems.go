@@ -7,15 +7,12 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// The problems chi's router answers with when no handler matches. Without
-// these, chi falls back to net/http's text/plain "404 page not found" and a
+// The problems chi's router answers with when no handler matches are
+// problemResourceNotFound and problemMethodNotAllowed (problems.go). Without
+// them, chi falls back to net/http's text/plain "404 page not found" and a
 // bare 405, neither of which is an RFC 7807 problem. The slugs match the
 // sibling contexts (resource-not-found is also what rejectNUL answers for a
 // NUL in the path; method-not-allowed is the fleet-wide 405 slug).
-var (
-	problemResourceNotFound = problemInfo{"resource-not-found", "Resource not found"}
-	problemMethodNotAllowed = problemInfo{"method-not-allowed", "Method not allowed"}
-)
 
 // handleRouteNotFound answers a request whose path matches no route.
 func handleRouteNotFound(w http.ResponseWriter, r *http.Request) {
