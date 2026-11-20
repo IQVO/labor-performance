@@ -58,30 +58,34 @@ const problemMalformedRequestBody = "malformed-request-body"
 type problemInfo struct {
 	slug  string
 	title string
+	// class is the replay class of the problem type (replay_class.go): what the Idempotency-Key
+	// middleware does with this answer when the request is retried. Every catalogue entry
+	// declares one; TestEveryProblemTypeDeclaresAReplayClass fails on one that does not.
+	class replayClass
 }
 
-// problemFor maps a typed domain/application error to its RFC 7807
+// problemTable maps a typed domain/application error to its RFC 7807
 // (type, title) pair. Mirrors statusFor's error groupings one-for-one —
 // statusFor itself is untouched; this only decides what goes in the body.
 var problemTable = []struct {
 	sentinel error
 	info     problemInfo
 }{
-	{usecases.ErrStandardNotFound, problemInfo{"standard-not-found", "No active labor standard for this task type"}},
-	{usecases.ErrAssociateNotFound, problemInfo{"associate-not-found", "No task performance recorded for this associate"}},
-	{ports.ErrConcurrentModification, problemInfo{"concurrent-modification", "The standard was concurrently modified; reload and retry"}},
-	{ports.ErrOpenStandardConflict, problemInfo{"standard-conflict", "Another standard is already open for this task type"}},
-	{shared.ErrUnknownTaskType, problemInfo{"unknown-task-type", "Task type must be PICK, PACK, or SLAM"}},
-	{shared.ErrUnknownHandlingUnit, problemInfo{"unknown-handling-unit", "Handling unit must be EACH, CASE, or PALLET"}},
-	{shared.ErrInvalidSiteCode, problemInfo{"invalid-site-code", "Site code must be 1-32 characters with no whitespace"}},
-	{performance.ErrEmptyEventId, problemInfo{"empty-event-id", "Kafka event id must not be empty"}},
-	{performance.ErrEmptyTaskId, problemInfo{"empty-task-id", "Task id must not be empty"}},
-	{standard.ErrNonPositiveExpectedSeconds, problemInfo{"non-positive-expected-seconds", "Expected seconds must be greater than zero"}},
-	{standard.ErrNegativeTravelComponentSeconds, problemInfo{"negative-travel-component-seconds", "Travel component seconds must not be negative"}},
-	{standard.ErrTravelComponentExceedsExpectedSeconds, problemInfo{"travel-component-exceeds-expected-seconds", "Travel component seconds must not exceed expected seconds"}},
-	{standard.ErrTeamLiftRequiresCaseUnit, problemInfo{"team-lift-requires-case-unit", "A team lift can only be declared on a CASE handling-unit standard"}},
-	{standard.ErrNonPositiveTeamLiftThreshold, problemInfo{"non-positive-team-lift-threshold", "Team lift threshold grams must be greater than zero"}},
-	{standard.ErrNonPositiveTeamLiftExpectedSeconds, problemInfo{"non-positive-team-lift-expected-seconds", "Team lift expected seconds must be greater than zero"}},
+	{usecases.ErrStandardNotFound, problemInfo{"standard-not-found", "No active labor standard for this task type", classRetryable}},
+	{usecases.ErrAssociateNotFound, problemInfo{"associate-not-found", "No task performance recorded for this associate", classRetryable}},
+	{ports.ErrConcurrentModification, problemInfo{"concurrent-modification", "The standard was concurrently modified; reload and retry", classRetryable}},
+	{ports.ErrOpenStandardConflict, problemInfo{"standard-conflict", "Another standard is already open for this task type", classRetryable}},
+	{shared.ErrUnknownTaskType, problemInfo{"unknown-task-type", "Task type must be PICK, PACK, or SLAM", classFinal}},
+	{shared.ErrUnknownHandlingUnit, problemInfo{"unknown-handling-unit", "Handling unit must be EACH, CASE, or PALLET", classFinal}},
+	{shared.ErrInvalidSiteCode, problemInfo{"invalid-site-code", "Site code must be 1-32 characters with no whitespace", classFinal}},
+	{performance.ErrEmptyEventId, problemInfo{"empty-event-id", "Kafka event id must not be empty", classFinal}},
+	{performance.ErrEmptyTaskId, problemInfo{"empty-task-id", "Task id must not be empty", classFinal}},
+	{standard.ErrNonPositiveExpectedSeconds, problemInfo{"non-positive-expected-seconds", "Expected seconds must be greater than zero", classFinal}},
+	{standard.ErrNegativeTravelComponentSeconds, problemInfo{"negative-travel-component-seconds", "Travel component seconds must not be negative", classFinal}},
+	{standard.ErrTravelComponentExceedsExpectedSeconds, problemInfo{"travel-component-exceeds-expected-seconds", "Travel component seconds must not exceed expected seconds", classFinal}},
+	{standard.ErrTeamLiftRequiresCaseUnit, problemInfo{"team-lift-requires-case-unit", "A team lift can only be declared on a CASE handling-unit standard", classFinal}},
+	{standard.ErrNonPositiveTeamLiftThreshold, problemInfo{"non-positive-team-lift-threshold", "Team lift threshold grams must be greater than zero", classFinal}},
+	{standard.ErrNonPositiveTeamLiftExpectedSeconds, problemInfo{"non-positive-team-lift-expected-seconds", "Team lift expected seconds must be greater than zero", classFinal}},
 }
 
 func problemFor(err error) problemInfo {
@@ -90,5 +94,5 @@ func problemFor(err error) problemInfo {
 			return row.info
 		}
 	}
-	return problemInfo{"internal-error", "An unexpected internal error occurred"}
+	return problemInternalError
 }
