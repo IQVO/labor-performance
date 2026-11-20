@@ -47,6 +47,22 @@ var ErrNonPositiveTeamLiftThreshold = errors.New("team lift threshold grams must
 // ErrNonPositiveExpectedSeconds.
 var ErrNonPositiveTeamLiftExpectedSeconds = errors.New("team lift expected seconds must be greater than zero")
 
+// ErrScopeMismatch is returned when a standard is asked to supersede a
+// standard of another scope. A revision closes only the record of the same
+// (task type, handling unit, site): a site's standard never closes the
+// site-less one or another site's, and the reverse (ADR 0038).
+var ErrScopeMismatch = errors.New("a standard can only supersede a standard of the same task type, handling unit and site")
+
+// Scope is what a standard is ABOUT: the task type, optionally one handling
+// unit (ADR 0035) and optionally one site (ADR 0038). At most one standard
+// is open per Scope. The zero HandlingUnit and SiteCode are the task-type-
+// only, site-less standard: exactly what a standard was before both ADRs.
+type Scope struct {
+	TaskType     shared.TaskType
+	HandlingUnit shared.HandlingUnit
+	SiteCode     shared.SiteCode
+}
+
 // TeamLiftOperators is the number of operators a team lift needs. It is a
 // constant, not a declared parameter: the business fact declared per
 // standard is the weight threshold and the standard time, and two is what
@@ -109,12 +125,19 @@ func (t TeamLift) Applies(weightG int64) bool { return weightG > t.thresholdG }
 // EACH, CASE or PALLET makes it the more specific standard for that
 // handling unit, which wins over the task-type-only one when a completed
 // task carries a handling unit. At most one standard is open per
-// (TaskType, HandlingUnit). TeamLift is the optional heavy-case rule and is
-// only valid on a CASE standard.
+// (TaskType, HandlingUnit) of a site. TeamLift is the optional heavy-case
+// rule and is only valid on a CASE standard.
+//
+// SiteCode is OPTIONAL (ADR 0038): "" (the default, and the only state
+// that existed before) is the site-less standard that applies to every
+// site; a site code scopes the standard to one facility. At most one
+// standard is open per (TaskType, HandlingUnit, SiteCode) — see Scope.
+// Scoring still resolves site-less standards only (ADR 0038 decision 3).
 type LaborStandard struct {
 	id                     shared.StandardId
 	taskType               shared.TaskType
 	handlingUnit           shared.HandlingUnit
+	siteCode               shared.SiteCode
 	teamLift               *TeamLift
 	expectedSeconds        int64
 	travelComponentSeconds *int64
@@ -141,20 +164,30 @@ func New(id shared.StandardId, taskType shared.TaskType, expectedSeconds int64, 
 // pair. handlingUnit "" is the task-type-only standard (identical to New).
 // teamLift is optional and only valid when handlingUnit is CASE
 // (ErrTeamLiftRequiresCaseUnit otherwise). Every New invariant applies.
+// The standard is site-less (every site).
 func NewForUnit(id shared.StandardId, taskType shared.TaskType, handlingUnit shared.HandlingUnit, expectedSeconds int64, travelComponentSeconds *int64, teamLift *TeamLift, effectiveFrom time.Time) (*LaborStandard, error) {
+	return NewForScope(id, Scope{TaskType: taskType, HandlingUnit: handlingUnit}, expectedSeconds, travelComponentSeconds, teamLift, effectiveFrom)
+}
+
+// NewForScope constructs a LaborStandard for a full Scope (task type,
+// optional handling unit, optional site). A Scope with no site code is
+// NewForUnit. Every NewForUnit invariant applies; the site code itself is
+// a validated value object (shared.NewSiteCode) by the time it gets here.
+func NewForScope(id shared.StandardId, scope Scope, expectedSeconds int64, travelComponentSeconds *int64, teamLift *TeamLift, effectiveFrom time.Time) (*LaborStandard, error) {
 	if expectedSeconds <= 0 {
 		return nil, ErrNonPositiveExpectedSeconds
 	}
 	if err := validateTravelComponentSeconds(travelComponentSeconds, expectedSeconds); err != nil {
 		return nil, err
 	}
-	if teamLift != nil && handlingUnit != shared.Case {
+	if teamLift != nil && scope.HandlingUnit != shared.Case {
 		return nil, ErrTeamLiftRequiresCaseUnit
 	}
 	return &LaborStandard{
 		id:                     id,
-		taskType:               taskType,
-		handlingUnit:           handlingUnit,
+		taskType:               scope.TaskType,
+		handlingUnit:           scope.HandlingUnit,
+		siteCode:               scope.SiteCode,
 		teamLift:               teamLift,
 		expectedSeconds:        expectedSeconds,
 		travelComponentSeconds: travelComponentSeconds,
@@ -173,15 +206,22 @@ func Rehydrate(id shared.StandardId, taskType shared.TaskType, expectedSeconds i
 
 // RehydrateForUnit is Rehydrate for a handling-unit standard: the same
 // silent reconstruction, carrying the handling unit and the optional team
-// lift as persisted.
+// lift as persisted. The standard is site-less.
 func RehydrateForUnit(id shared.StandardId, taskType shared.TaskType, handlingUnit shared.HandlingUnit, expectedSeconds int64, travelComponentSeconds *int64, teamLift *TeamLift, effectiveFrom time.Time, effectiveTo *time.Time, version int) *LaborStandard {
+	return RehydrateForScope(id, Scope{TaskType: taskType, HandlingUnit: handlingUnit}, expectedSeconds, travelComponentSeconds, teamLift, effectiveFrom, effectiveTo, version)
+}
+
+// RehydrateForScope is Rehydrate for a full Scope (ADR 0038): the same
+// silent reconstruction, carrying the site code as persisted.
+func RehydrateForScope(id shared.StandardId, scope Scope, expectedSeconds int64, travelComponentSeconds *int64, teamLift *TeamLift, effectiveFrom time.Time, effectiveTo *time.Time, version int) *LaborStandard {
 	if version <= 0 {
 		version = 1
 	}
 	return &LaborStandard{
 		id:                     id,
-		taskType:               taskType,
-		handlingUnit:           handlingUnit,
+		taskType:               scope.TaskType,
+		handlingUnit:           scope.HandlingUnit,
+		siteCode:               scope.SiteCode,
 		teamLift:               teamLift,
 		expectedSeconds:        expectedSeconds,
 		travelComponentSeconds: travelComponentSeconds,
@@ -197,6 +237,19 @@ func RehydrateForUnit(id shared.StandardId, taskType shared.TaskType, handlingUn
 // keeps historically-frozen TaskPerformance rows accurate.
 func (s *LaborStandard) Close(at time.Time) {
 	s.effectiveTo = &at
+}
+
+// Supersede makes s the revision of prior: prior is closed at the instant s
+// becomes effective (append-only history, ADR 0004). Only a standard of
+// exactly the same Scope can be superseded (ErrScopeMismatch otherwise,
+// and prior is left untouched): a revision closes only the same (task
+// type, handling unit, site), never a sibling scope (ADR 0035, ADR 0038).
+func (s *LaborStandard) Supersede(prior *LaborStandard) error {
+	if prior.Scope() != s.Scope() {
+		return ErrScopeMismatch
+	}
+	prior.Close(s.effectiveFrom)
+	return nil
 }
 
 // IsActiveAt reports whether this standard was the active one for its
@@ -219,6 +272,15 @@ func (s *LaborStandard) ExpectedSeconds() int64    { return s.expectedSeconds }
 // HandlingUnit is the handling unit this standard is specific to, or ""
 // when it is about the task type alone.
 func (s *LaborStandard) HandlingUnit() shared.HandlingUnit { return s.handlingUnit }
+
+// SiteCode is the site this standard is scoped to, or "" for the site-less
+// standard that applies to every site (ADR 0038).
+func (s *LaborStandard) SiteCode() shared.SiteCode { return s.siteCode }
+
+// Scope is what this standard is about: (TaskType, HandlingUnit, SiteCode).
+func (s *LaborStandard) Scope() Scope {
+	return Scope{TaskType: s.taskType, HandlingUnit: s.handlingUnit, SiteCode: s.siteCode}
+}
 
 // TeamLift is the optional heavy-case rule (CASE standards only), nil when
 // none was declared.

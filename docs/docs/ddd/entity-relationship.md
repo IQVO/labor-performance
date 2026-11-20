@@ -29,12 +29,16 @@ copied values, deliberately not enforced by the database.
 erDiagram
     labor_standards {
         TEXT id PK
-        TEXT task_type "indexed, partial UK where effective_to IS NULL"
+        TEXT task_type "indexed, partial UK with handling_unit and site_code where effective_to IS NULL"
         BIGINT expected_seconds
         TIMESTAMPTZ effective_from
         TIMESTAMPTZ effective_to "nullable"
         BIGINT travel_component_seconds "nullable, CHECK 0 to expected_seconds"
         INTEGER version "default 1, OCC token"
+        TEXT handling_unit "default empty, CHECK empty EACH CASE PALLET"
+        BIGINT team_lift_threshold_g "nullable, CASE only"
+        BIGINT team_lift_expected_seconds "nullable, CASE only"
+        TEXT site_code "default empty = every site, CHECK at most 32 chars no whitespace"
     }
     task_performances {
         TEXT event_id PK
@@ -45,6 +49,8 @@ erDiagram
         BIGINT standard_seconds_at_completion
         DOUBLE_PRECISION efficiency_pct "nullable"
         TIMESTAMPTZ completed_at
+        TEXT handling_unit "default empty"
+        BOOLEAN team_lift "default false"
     }
     idle_periods {
         BIGSERIAL id PK
@@ -92,14 +98,18 @@ Source: `migrations/0001_init.up.sql`, `migrations/0002_outbox.up.sql`,
 `migrations/0003_idle_periods.up.sql`,
 `migrations/0004_travel_component_seconds.up.sql`,
 `migrations/0005_idempotency_keys.up.sql`,
-`migrations/0006_standard_version_and_one_open.up.sql`;
+`migrations/0006_standard_version_and_one_open.up.sql`,
+`migrations/0007_handling_unit_standards.up.sql`,
+`migrations/0008_standard_site_scope.up.sql`;
 `schema_migrations` is golang-migrate's own bookkeeping table
 (`internal/adapters/outbound/postgres/migrate.go`). Omitted: index names
 (listed below) and the `.down.sql` files.
 
 Indexes: `idx_labor_standards_task_type`,
 `idx_labor_standards_one_open_per_task_type` (UNIQUE on `task_type`
-WHERE `effective_to IS NULL`, ADR 0022),
+WHERE `effective_to IS NULL`, ADR 0022; widened to
+(`task_type`, `handling_unit`) by ADR 0035 and to (`task_type`,
+`handling_unit`, `site_code`) by ADR 0038),
 `idx_task_performances_associate_id`, `idx_task_performances_task_type`,
 `idx_idle_periods_associate_id_ended_at`,
 `idx_idle_periods_task_type_ended_at`, `idx_outbox_events_unpublished`

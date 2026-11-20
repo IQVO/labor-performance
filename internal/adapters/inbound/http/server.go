@@ -82,6 +82,10 @@ func NewRouter(s *Server, logger *slog.Logger, serviceName string) http.Handler 
 	// Postgres 22021 -> 500 (ADR 0034); it runs before the route-scoped
 	// idempotency middleware so a rejected request never records its key.
 	r.Use(rejectNUL)
+	// An unknown route or a wrong method is an RFC 7807 problem, not chi's
+	// text/plain default.
+	r.NotFound(handleRouteNotFound)
+	r.MethodNotAllowed(methodNotAllowedFor(r))
 
 	// /healthz stays outside any route group; it never needed a
 	// credential and still doesn't now that REST auth is gone.
@@ -137,8 +141,14 @@ func (s *Server) handleDefineStandard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	site, err := shared.NewSiteCode(req.SiteCode)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
 	spec := usecases.DefineStandardSpec{
-		TaskType: taskType, HandlingUnit: unit,
+		TaskType: taskType, HandlingUnit: unit, SiteCode: site,
 		ExpectedSeconds: req.ExpectedSeconds, TravelComponentSeconds: req.TravelComponentSeconds,
 	}
 	if req.TeamLift != nil {
@@ -170,7 +180,16 @@ func (s *Server) handleGetStandard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	st, err := s.GetStandard.ExecuteResolved(r.Context(), taskType, unit)
+	// The optional siteCode query reads that site's standard EXACTLY (ADR
+	// 0038): no fallback to the site-less one, 404 when the site has none.
+	// Without it the answer is the site-less standard, as before.
+	site, err := shared.NewSiteCode(r.URL.Query().Get("siteCode"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+
+	st, err := s.GetStandard.ExecuteForSite(r.Context(), taskType, unit, site)
 	if err != nil {
 		writeError(w, r, err)
 		return
@@ -288,10 +307,12 @@ func toStandardResponse(taskType shared.TaskType, expectedSeconds int64, travelC
 }
 
 // standardResponseOf maps a LaborStandard to its response body, adding the
-// ADR 0035 handling-unit fields only when the standard has them.
+// ADR 0035 handling-unit fields and the ADR 0038 site code only when the
+// standard has them.
 func standardResponseOf(st *standard.LaborStandard) standardResponse {
 	resp := toStandardResponse(st.TaskType(), st.ExpectedSeconds(), st.TravelComponentSeconds(), st.EffectiveFrom(), st.EffectiveTo())
 	resp.HandlingUnit = string(st.HandlingUnit())
+	resp.SiteCode = string(st.SiteCode())
 	if tl := st.TeamLift(); tl != nil {
 		resp.TeamLift = &teamLiftResponse{ThresholdG: tl.ThresholdG(), ExpectedSeconds: tl.ExpectedSeconds(), Operators: tl.Operators()}
 	}
@@ -318,7 +339,7 @@ func toScorecardResponse(sc ports.Scorecard) scorecardResponse {
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, dest any) bool {
 	if err := json.NewDecoder(r.Body).Decode(dest); err != nil {
-		writeProblem(w, http.StatusBadRequest, problemInfo{problemMalformedRequestBody, "The request body is not valid JSON"}, err.Error(), r.URL.Path)
+		writeProblem(w, http.StatusBadRequest, problemMalformedJSON, err.Error(), r.URL.Path)
 		return false
 	}
 	return true
@@ -330,7 +351,11 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	writeProblem(w, statusFor(err), problemFor(err), err.Error(), r.URL.Path)
 }
 
+// writeProblem is the one writer of a problem answer. It marks the idempotency middleware's
+// capturing writer with the problem type's replay class (replay_class.go) before the status is
+// written: the middleware reads that mark, never the slug.
 func writeProblem(w http.ResponseWriter, status int, info problemInfo, detail, instance string) {
+	markReplayClass(w, info.class)
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(problemDetails{

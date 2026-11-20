@@ -23,7 +23,7 @@ flowchart TB
   U["Unit + httptest + fake Kafka reader<br/>go test ./... -race<br/>90% coverage gate on domain, application, analytics"]
   A["Architecture fitness<br/>internal/architecture (arch-go + source scans)"]
   M["Mutation<br/>gremlins, efficacy and mutant-coverage gate 99"]
-  B["BDD / Gherkin<br/>10 feature files, 74 scenarios"]
+  B["BDD / Gherkin<br/>19 feature files, 158 scenarios"]
   E["MCP evals E1-E3<br/>schemas, wire conformance, 15 behavioral scenarios"]
   C["Contract<br/>Schemathesis over apis/openapi.yaml"]
   I["Integration<br/>-tags=integration, 23 files, testcontainers Postgres and Kafka"]
@@ -67,21 +67,47 @@ harness `repo_lint` rule R11 (coverage-scope) forbids a workflow passing
   real chi router (`httptest.NewServer(inboundhttp.NewRouter(...))`)
   over the in-memory adapters. Kafka-driven steps call
   `RecordTaskPerformance` directly.
-- **Features:** 11 files under `features/`, 87 scenarios:
+- **Features:** 19 files under `features/` hold **158**
+  `Scenario`/`Scenario Outline` blocks (30 of them outlines; count with
+  `git grep -c -E "^[[:space:]]*Scenario" -- features`). No block is tagged
+  `@known-bug` any more; the runner still excludes that tag by default
+  (`BDD_TAGS` defaults to `~@known-bug`) so a future known gap can be parked
+  there, and `make bdd` runs all 158 blocks as **249** executed scenarios and
+  1593 steps (`249 scenarios (249 passed)`, `1593 steps (1593 passed)`, godog's
+  own summary from `go test . -run TestFeatures -count=1 -v`):
 
-| File | Scenarios | Feature |
-| --- | --- | --- |
-| `features/handling_unit_standards.feature` | 13 | Engineered standards per handling unit and the declared team lift (ADR 0035) |
-| `features/performance_scoring.feature` | 13 | Scoring completed tasks and reading the scorecard |
-| `features/scorecard.feature` | 1 | Reading an associate's performance scorecard |
-| `features/standards.feature` | 5 | Defining and reading engineered labor standards |
-| `features/standards_events_and_validation.feature` | 12 | Defining standards and the events that announce them |
-| `features/task_type_performance.feature` | 2 | Reading fleet-wide TaskType performance |
-| `features/task_type_performance_data.feature` | 9 | Reading fleet-wide performance for a task type |
-| `features/travel_component.feature` | 5 | Declaring an optional travel component on a labor standard |
-| `features/trend_and_coaching.feature` | 6 | Reading performance trends and coaching signals |
-| `features/utilization.feature` | 4 | Reading idle-gap utilization over a trailing window |
-| `features/utilization_data.feature` | 17 | Measuring utilization from recorded idle gaps |
+| File | Scenarios | Executed | Feature |
+| --- | --- | --- | --- |
+| `features/event_contract_rules.feature` | 12 | 12 | The event contract other contexts and the projector rely on: topic, key, subject, type, dataschema, CloudEvents source/time, field omission, double publication, null efficiency/idle never zero |
+| `features/handling_unit_standards.feature` | 13 | 13 | Engineered standards per handling unit and the declared team lift (ADR 0035) |
+| `features/performance_scoring.feature` | 13 | 17 | Scoring completed tasks and reading the scorecard |
+| `features/readiness_rules.feature` | 7 | 8 | Readiness, liveness and graceful shutdown: dependency outage is 503 while liveness stays green, every failing dependency named, drain before dependencies, verdict caching |
+| `features/reports_rules.feature` | 17 | 33 | The labor-performance report read model: hour bucket, UNCLASSIFIED bucket, volume-weighted totals, half-open `[from,to)` window, `invalid-report-query`, task-type filter, freshness lag |
+| `features/rest_surface_rules.feature` | 3 | 8 | What a browser may call (CORS preflight) and how a malformed window degrades |
+| `features/scorecard.feature` | 1 | 1 | Reading an associate's performance scorecard |
+| `features/scorecard_rules.feature` | 4 | 7 | Scorecard trend, coaching flag and per-task-type breakdown at their boundaries |
+| `features/scoring_rules.feature` | 8 | 16 | Scoring completions and deriving idle gaps: efficiency, unscorable task types, idle cap, dedupe on the event id |
+| `features/standard_rules.feature` | 16 | 41 | Standard history, as-of scoring and the problem catalogue, including the RFC 7807 `resource-not-found` for an unknown route |
+| `features/standards.feature` | 5 | 5 | Defining and reading engineered labor standards |
+| `features/standards_events_and_validation.feature` | 12 | 18 | Defining standards and the events that announce them |
+| `features/task_type_performance.feature` | 2 | 2 | Reading fleet-wide TaskType performance |
+| `features/task_type_performance_data.feature` | 9 | 9 | Reading fleet-wide performance for a task type |
+| `features/travel_component.feature` | 5 | 5 | Declaring an optional travel component on a labor standard |
+| `features/trend_and_coaching.feature` | 6 | 18 | Reading performance trends and coaching signals |
+| `features/utilization.feature` | 4 | 4 | Reading idle-gap utilization over a trailing window |
+| `features/utilization_data.feature` | 17 | 22 | Measuring utilization from recorded idle gaps |
+| `features/utilization_rules.feature` | 4 | 10 | Utilization windows and the open gap at their boundaries |
+| **19 files** | **158** | **249** | |
+
+The `*_rules.feature` files pin the rules written in the documentation; their
+steps are in `steps_rules_test.go`, `steps_reports_rules_test.go` and
+`steps_wire_rules_test.go`. The scenario "A request for a route that does not
+exist is a resource-not-found problem" (`standard_rules.feature`) pins the
+RFC 7807 `404` for an unknown route (and `internal/adapters/inbound/http/route_problems_test.go`
+pins it, plus the `405 method-not-allowed`, on both routers). It was a
+`@known-bug` until both routers got a chi `NotFound`/`MethodNotAllowed`
+handler; `BDD_TAGS=@known-bug go test . -run TestFeatures -count=1` now
+selects no scenario.
 
 A separate feature file,
 `internal/adapters/inbound/mcp/testdata/features/mcp_tools.feature`
@@ -107,6 +133,12 @@ A separate feature file,
   - idempotency middleware, including concurrent same-key requests:
     `internal/adapters/inbound/http/idempotency_integration_test.go`,
     `idempotency_conflict_integration_test.go`
+  - idempotency replay classes ([ADR 0039](../adr/0039-idempotency-replay-classes.md)):
+    the unit tests in `internal/adapters/inbound/http/replay_class_test.go` (no
+    Docker), the harness template over a real Postgres
+    (`idempotency_replay_classes_integration_test.go` and its wiring file), and
+    `idempotency_retryable_integration_test.go` (the loser's key row is absent and its
+    retry under the same key executes)
   - Kafka consumers and DLQ (real broker), including DLQ topic
     auto-creation: `internal/adapters/inbound/kafka/consumer_integration_test.go`,
     `consumer_dlq_integration_test.go`, `consumer_dlq_autocreate_integration_test.go`,

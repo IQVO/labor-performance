@@ -79,8 +79,14 @@ func TestIdempotency_MalformedKey_Returns400Invalid(t *testing.T) {
 // stubRouter wraps two POST routes and one PATCH route in the real
 // middleware; every handler counts its executions.
 func stubRouter(pool *pgxpool.Pool, runs *atomic.Int32, status func(n int32) int) http.Handler {
-	handler := func(w http.ResponseWriter, _ *http.Request) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
 		n := runs.Add(1)
+		if code := status(n); code == http.StatusUnprocessableEntity {
+			// A refusal is answered through the production error writer: its problem type's
+			// replay class (FINAL here) is what the middleware reads.
+			inboundhttp.RefuseForTest(w, r, "non-positive-expected-seconds", code)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status(n))
 		_, _ = w.Write([]byte(`{"run":` + strconv.Itoa(int(n)) + `}`))
@@ -138,8 +144,9 @@ func TestIdempotency_KeyIsGlobal_OtherRouteOrMethodIs409(t *testing.T) {
 }
 
 // A 5xx is not a deterministic answer: it is never stored, so the retry with
-// the same key executes again; a 4xx is stored and replayed.
-func TestIdempotency_ServerErrorIsNotStored_ClientErrorIs(t *testing.T) {
+// the same key executes again; a FINAL 4xx (a validation refusal) is stored and
+// replayed (the RETRYABLE ones are not: idempotency_retryable_integration_test.go).
+func TestIdempotency_ServerErrorIsNotStored_FinalRefusalIs(t *testing.T) {
 	pool := idempotencyDB(t)
 	var runs atomic.Int32
 	router := stubRouter(pool, &runs, func(n int32) int {

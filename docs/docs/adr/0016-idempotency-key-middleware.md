@@ -18,6 +18,8 @@ record. Ported from order-management's reference implementation
 
 > **Amended by [ADR-0037](./0037-adopt-fleet-rest-api-guideline.md) (fleet REST API guideline).** Wherever this record says the same key with a different body is answered `422`, it is now `409 idempotency-key-reused` (the fingerprint is method + path + SHA-256(body), and the key is global); a replay carries `Idempotency-Replayed: true`; a key that is not 1-128 printable ASCII characters is `400 idempotency-key-invalid`; and a `5xx` rolls the transaction back and is never stored.
 
+> **Amended by [ADR-0039](./0039-idempotency-replay-classes.md) (2026-11-20, idempotency replay classes).** Wherever this record says every normal response, including every `4xx`, is cached and replayed, it is now: a `2xx` is stored, a refusal is stored only when its problem type declares `FINAL` or `OUTCOME`, and a refusal declared `RETRYABLE` (`concurrent-modification`, `standard-conflict`, a `404` on a fact not known yet), a `5xx` or a panic rolls the whole transaction back, key row included, so a retry under the same key executes again.
+
 ## Context
 
 `POST /standards` (`DefineStandard`) is this service's **one true

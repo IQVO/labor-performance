@@ -61,6 +61,7 @@ flowchart LR
   subgraph ext["Outside this repo"]
     FEX["fulfillment-execution"]
     WFM["workforce-management"]
+    WP["warehouse-planning"]
     OPS["warehouse-ops-agent"]
     CON["warehouse-console + labor_mfe"]
   end
@@ -106,6 +107,7 @@ flowchart LR
   REL --> TEV
   SWP --> OLTP
   TEV --> WFM
+  TEV --> WP
   OPS --> MCPA --> UC
   TAN --> AC --> PRJ --> ANA
   OPS --> RR

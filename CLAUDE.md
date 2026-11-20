@@ -62,8 +62,8 @@ preference (ADR-0021):
 ## Key commands
 
 ```bash
-go run ./cmd/labor            # in-memory adapters, no DB/broker needed
-docker compose up -d postgres # :5435; set DATABASE_URL, migrations run automatically
+docker compose up -d          # postgres :5435 + kafka; migrations run on boot
+go run ./cmd/labor            # needs DATABASE_URL, KAFKA_BROKERS, KAFKA_CONSUMER_GROUP (no in-memory mode, ADR 0034)
 
 make check-fast  # fmt-check + vet + arch-test — run before saying "done"
 make check       # fmt-check + vet + build + lint + test -race (mirrors CI)

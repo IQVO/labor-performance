@@ -553,4 +553,5 @@ func registerWave2(sc *godog.ScenarioContext, w *world) {
 	sc.Step(`^a standard definition with a malformed JSON body is sent$`, s.malformedStandardBody)
 
 	registerHandlingUnit(sc, w, s) // features_handling_test.go
+	registerRules(sc, w, s)        // steps_rules_test.go
 }

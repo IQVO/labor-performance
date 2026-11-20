@@ -60,18 +60,23 @@ Omitted: `Rehydrate` (a persistence round-trip, not a transition) and the
 | `expectedSeconds > 0` | `standard.ErrNonPositiveExpectedSeconds` in `standard.New` (HTTP 422) |
 | `travelComponentSeconds`, when present, is `>= 0` | `standard.ErrNegativeTravelComponentSeconds` in `validateTravelComponentSeconds` (HTTP 422); also the `CHECK` on `labor_standards.travel_component_seconds` |
 | `travelComponentSeconds`, when present, is `<= expectedSeconds` | `standard.ErrTravelComponentExceedsExpectedSeconds` (HTTP 422); same `CHECK` |
-| At most one open standard per `TaskType` | partial unique index `idx_labor_standards_one_open_per_task_type` → `ports.ErrOpenStandardConflict` (HTTP 409) in `postgres.StandardRepo.Save` |
+| At most one open standard per (`TaskType`, `HandlingUnit`, `SiteCode`) | `standard.Scope` + `LaborStandard.Supersede` (`ErrScopeMismatch`: a revision closes only the same triple, ADR 0035, ADR 0038); partial unique index `idx_labor_standards_one_open_per_task_type` → `ports.ErrOpenStandardConflict` (HTTP 409) in `postgres.StandardRepo.Save` |
+| `SiteCode`, when present, is 1-32 characters with no whitespace | `shared.ErrInvalidSiteCode` from `shared.NewSiteCode` at the REST boundary (HTTP 400); also the `labor_standards_site_code_shape` `CHECK` |
 | No lost update when two revisions race | `version` guard in `postgres.StandardRepo.Save` → `ports.ErrConcurrentModification` (HTTP 409) |
 | `TaskType` is `PICK`, `PACK` or `SLAM` | `shared.ErrUnknownTaskType` from `shared.NewTaskType` at the REST boundary (HTTP 400) |
 
 ### 5. Corrective Policies
 
 - A conflicting revision (409) is not retried by the server; the caller
-  re-reads with `GET /standards/{taskType}` and resubmits.
+  re-reads with `GET /standards/{taskType}` and resubmits. The 409s
+  (`concurrent-modification`, `standard-conflict`) are RETRYABLE: not stored,
+  their `Idempotency-Key` is released, and the same retry executes again
+  (ADR 0039).
 - A repeated `POST /standards` with the same `Idempotency-Key` and body
   replays the stored response (with `Idempotency-Replayed: true`) instead of
   revising twice; the same key with a different method, path or body is
-  rejected with 409 `idempotency-key-reused` (ADR 0016, ADR 0037).
+  rejected with 409 `idempotency-key-reused` (ADR 0016, ADR 0037). A validation
+  refusal is replayed too; a RETRYABLE refusal is not (ADR 0039).
 
 ### 6. Handled Commands
 
@@ -87,7 +92,10 @@ Omitted: `Rehydrate` (a persistence round-trip, not a transition) and the
 - `com.warehouse.wes.labor-performance.standard.LaborStandardRevised`
   (a prior standard was closed).
 
-Both go to `warehouse.labor-performance.analytics` only.
+Both go to `warehouse.labor-performance.analytics` and, since
+[ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md),
+`warehouse.labor-performance.events` (key `task_type` on both, the same
+`data`, `site_code` only for a site-scoped standard).
 
 ### 8. Throughput (estimate)
 

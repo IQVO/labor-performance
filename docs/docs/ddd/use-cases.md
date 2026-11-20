@@ -38,27 +38,37 @@ also not an application use case.
   `expectedSeconds`, an optional `travelComponentSeconds`, an optional
   `handlingUnit` (`EACH`, `CASE`, `PALLET`) and, for `CASE` only, an optional
   `teamLift` `{thresholdG, expectedSeconds}`
-  ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)). With a
+  ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)), and an
+  optional `siteCode` (1-32 characters, no whitespace, validated by
+  `shared.NewSiteCode`, 400 `invalid-site-code` otherwise; absent = every
+  site, [ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md)).
+  With a
   database, the `Idempotency-Key` header is required
   ([ADR 0016](../adr/0016-idempotency-key-middleware.md)).
 - **Steps:**
-  1. Load the currently active standard for the task type and handling unit
-     (the task-type-only standard when no `handlingUnit` is given).
+  1. Load the currently active standard for the scope: task type, handling
+     unit and site (the task-type-only, site-less standard when neither is
+     given).
   2. Mint a new `StandardId`.
-  3. `standard.New` checks the invariants: `expectedSeconds > 0`,
+  3. `standard.NewForScope` checks the invariants: `expectedSeconds > 0`,
      `travelComponentSeconds >= 0`, travel ≤ expected, and a `teamLift` only on
      `CASE` with a positive threshold and positive seconds. A violation
      returns 422 and records `labor_performance.standards.defined{outcome="rejected"}`.
-  4. Atomically, close the prior standard at `now` (it is never
-     overwritten), save the new one, and publish the event.
+  4. Atomically, close the prior standard of the same scope at `now`
+     (`Supersede`; it is never overwritten), save the new one, and publish
+     the event.
   5. Record `outcome="accepted"`.
 - **Concurrency invariants:** the `version` column gives optimistic
   locking on `Save` (409 `concurrent-modification`), and the unique
-  partial index allows one open standard per `task_type` and `handling_unit` (409
+  partial index allows one open standard per `task_type`, `handling_unit`
+  and `site_code` (409
   `standard-conflict`) ([ADR 0022](../adr/0022-optimistic-concurrency-one-open-standard.md)).
-- **Events:** `LaborStandardDefined` when no standard was active,
-  otherwise `LaborStandardRevised` (carrying `previous_expected_seconds`).
-  Both go to `warehouse.labor-performance.analytics` only.
+- **Events:** `LaborStandardDefined` when no standard of the scope was
+  active, otherwise `LaborStandardRevised` (carrying
+  `previous_expected_seconds`). Both go to
+  `warehouse.labor-performance.analytics` and, since ADR 0038,
+  `warehouse.labor-performance.events` (key TaskType, the same `data`),
+  with `site_code` only for a site-scoped standard.
 
 ## RecordTaskPerformance
 
@@ -85,6 +95,9 @@ also not an application use case.
      threshold is strictly below the declared `WeightG` scores the completion
      against the team-lift seconds
      ([ADR 0035](../adr/0035-handling-unit-standards-and-team-lift.md)).
+     Only site-less standards are ever resolved: a site-scoped standard
+     never changes a score
+     ([ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md)).
   3. `performance.NewWithHandling` requires a non-empty event id and task id.
      `EfficiencyPct = 100 × standard / actual`, or `nil` when either is
      ≤ 0. The value is frozen for good.
@@ -109,11 +122,15 @@ also not an application use case.
 
 `internal/application/usecases/get_standard.go`
 
-- **Inputs:** `taskType`, and over REST an optional `handlingUnit` query.
+- **Inputs:** `taskType`, and over REST an optional `handlingUnit` and an
+  optional `siteCode` query.
 - **Returns:** the currently open `LaborStandard`, or
   `ErrStandardNotFound` (404 `standard-not-found`, or an MCP tool error).
   With a handling unit, `ExecuteResolved` returns the unit's own standard,
-  else the task-type-only one (the MCP tool never passes a unit).
+  else the task-type-only one (the MCP tool never passes a unit). Without a
+  site the answer is always site-less; with one, `ExecuteForSite` returns
+  exactly that site's standard and never falls back to the site-less one
+  ([ADR 0038](../adr/0038-labor-standards-on-the-integration-topic-and-site-scope.md)).
 
 ## GetAssociateScorecard
 

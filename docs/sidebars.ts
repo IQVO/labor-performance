@@ -120,6 +120,8 @@ const sidebars: SidebarsConfig = {
         'adr/0035-handling-unit-standards-and-team-lift',
         'adr/0036-a2a-inbound-adapter',
         'adr/0037-adopt-fleet-rest-api-guideline',
+        'adr/0038-labor-standards-on-the-integration-topic-and-site-scope',
+        'adr/0039-idempotency-replay-classes',
       ],
     },
   ],

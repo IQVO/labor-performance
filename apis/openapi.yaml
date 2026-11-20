@@ -109,6 +109,16 @@ paths:
         `teamLift` (ADR 0035).
 
 
+        A standard may optionally be scoped to one site (`siteCode`, a
+        facility-layout site code, ADR 0038). Absent means the site-less
+        standard that applies to every site, exactly as before. At most one
+        standard is open per (taskType, handlingUnit, siteCode): a site's
+        standard never closes the site-less one, nor the reverse, and
+        revising it closes only the prior standard of the same site. Scoring
+        is unchanged: completed tasks are still scored against site-less
+        standards only.
+
+
         Idempotent retries: clients MUST always send an `Idempotency-Key`
         header (1-128 printable ASCII characters, a client-generated UUID
         per logical submit); a retried request with the same key, method,
@@ -116,6 +126,15 @@ paths:
         response header `Idempotency-Replayed: true`, instead of defining
         the standard a second time. The same key with a different method,
         path or body is 409 `idempotency-key-reused`.
+
+
+        What is replayed: a 2xx, and a refusal that is final for the request
+        (a validation answer such as 400 `unknown-task-type` or 422
+        `non-positive-expected-seconds`). A refusal that depends on state that
+        can change is NOT stored and its key is released, so the same
+        request under the same key executes again: 409
+        `concurrent-modification` and 409 `standard-conflict`, and every 5xx
+        or panic. A different body under a released key is a new request.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -145,6 +164,12 @@ paths:
                   teamLift:
                     thresholdG: 18000
                     expectedSeconds: 75
+              siteStandard:
+                summary: A PICK standard scoped to one site (ADR 0038)
+                value:
+                  taskType: PICK
+                  siteCode: SITE-GRU-01
+                  expectedSeconds: 40
       responses:
         "201":
           description: Standard defined (or the revision recorded)
@@ -158,7 +183,9 @@ paths:
         "400":
           description: >
             Unknown task type (including an absent or empty `taskType`),
-            unknown handling unit (not EACH, CASE or PALLET), a body that is
+            unknown handling unit (not EACH, CASE or PALLET), a `siteCode`
+            longer than 32 characters or containing whitespace
+            (invalid-site-code), a body that is
             not valid JSON or contains a NUL character
             (malformed-request-body), a missing Idempotency-Key header
             (idempotency-key-required), or an Idempotency-Key that is not
@@ -174,9 +201,11 @@ paths:
             concurrency race: another writer modified the same labor
             standard after this request's snapshot
             (concurrent-modification), or another standard is already open
-            for this task type and handling unit (standard-conflict).
-            Re-fetch and retry; never retry an idempotency-key-reused with
-            the same key.
+            for this task type, handling unit and site (standard-conflict).
+            concurrent-modification and standard-conflict are not stored:
+            the Idempotency-Key is released, so re-fetch and retry the same
+            request with the same key and it executes again. An
+            idempotency-key-reused is never retried with the same key.
           content:
             application/problem+json:
               schema:
@@ -212,9 +241,18 @@ paths:
         task-type-only standard (most specific wins, ADR 0035). The
         returned body's own `handlingUnit` says which of the two answered
         (absent = the task-type-only one).
+
+
+        Without `siteCode` the answer is always a site-less standard,
+        exactly as before. With `siteCode` the answer is the open standard
+        of EXACTLY (taskType, handlingUnit or none, siteCode), with no
+        fallback to the site-less standard or to the task-type-only one, and
+        404 when that site has none (ADR 0038). Which of a site's standard
+        and the site-less one a consumer prefers is the consumer's rule.
       parameters:
         - $ref: "#/components/parameters/TaskTypePathParam"
         - $ref: "#/components/parameters/HandlingUnitQueryParam"
+        - $ref: "#/components/parameters/SiteCodeQueryParam"
       responses:
         "200":
           description: The currently-active (resolved) standard
@@ -240,14 +278,25 @@ paths:
                     taskType: PICK
                     expectedSeconds: 45
                     effectiveFrom: "2026-10-24T08:00:00Z"
+                siteStandard:
+                  summary: ?siteCode=SITE-GRU-01 reads that site's standard exactly
+                  value:
+                    taskType: PICK
+                    siteCode: SITE-GRU-01
+                    expectedSeconds: 40
+                    effectiveFrom: "2026-11-18T08:00:00Z"
         "400":
-          description: Unknown task type or unknown handling unit
+          description: >-
+            Unknown task type, unknown handling unit, or a siteCode longer
+            than 32 characters or containing whitespace (invalid-site-code)
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
         "404":
-          description: No active standard for this task type
+          description: >-
+            No active standard for this task type (or, with siteCode, none
+            for exactly that site)
           content:
             application/problem+json:
               schema:
@@ -397,7 +446,11 @@ components:
         /standards: a retry carrying the same key, method, path and an
         identical body replays the original stored response (with the
         response header `Idempotency-Replayed: true`) instead of
-        re-executing the create; the same key with a different method, path
+        re-executing the create, when that response is final for the
+        request (a 2xx, or a validation refusal); a refusal that depends on
+        state that can change (concurrent-modification, standard-conflict)
+        and any 5xx is not stored, so its retry under the same key executes
+        again; the same key with a different method, path
         or body is rejected with 409 idempotency-key-reused, a missing key
         is a 400 idempotency-key-required and a malformed one a 400
         idempotency-key-invalid. Postgres is the only runtime, so the check
@@ -418,6 +471,17 @@ components:
         one). Absent or empty means the task-type-only standard.
       schema:
         $ref: "#/components/schemas/HandlingUnit"
+    SiteCodeQueryParam:
+      name: siteCode
+      in: query
+      required: false
+      description: >
+        A site code (1-32 characters, no whitespace; ADR 0038). Reads the
+        open standard of exactly that site, 404 when it has none; never
+        falls back to the site-less standard. Absent or empty means the
+        site-less standard, as before.
+      schema:
+        $ref: "#/components/schemas/SiteCode"
     WindowQueryParam:
       name: window
       in: query
@@ -450,6 +514,25 @@ components:
         The packaging level a standard is declared for, and that a completed
         task handled (ADR 0035). INNER is deliberately absent: no flow
         implements it in v1.
+    SiteCode:
+      type: string
+      minLength: 1
+      maxLength: 32
+      pattern: '^[^\t\n\v\f\r\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$'
+      description: >-
+        The facility (facility-layout site code) a standard is scoped to
+        (ADR 0038): 1-32 characters with no Unicode White_Space code point
+        anywhere — exactly what the domain constructor shared.NewSiteCode
+        enforces, so the schema and the constructor cannot drift. The
+        pattern spells the refused set out (U+0009-U+000D, U+0020, U+0085,
+        U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F,
+        U+3000) because `\S` is engine-dependent: ECMA-262 admits U+0085,
+        Schemathesis's generation admitted U+00A0/U+0085/U+000B, and those
+        schema-valid-but-domain-refused values made the contract job fail
+        at random (CI run 44738035745). Absent means the site-less
+        standard that applies to every site. Declarative input: this
+        service never looks a site up in a sibling context.
+      example: SITE-GRU-01
     TeamLiftRequest:
       type: object
       required: [thresholdG, expectedSeconds]
@@ -506,6 +589,8 @@ components:
           example: 15
         teamLift:
           $ref: "#/components/schemas/TeamLiftRequest"
+        siteCode:
+          $ref: "#/components/schemas/SiteCode"
     Standard:
       type: object
       required: [taskType, expectedSeconds, effectiveFrom]
@@ -514,6 +599,8 @@ components:
           $ref: "#/components/schemas/TaskType"
         handlingUnit:
           $ref: "#/components/schemas/HandlingUnit"
+        siteCode:
+          $ref: "#/components/schemas/SiteCode"
         expectedSeconds:
           type: integer
           format: int64

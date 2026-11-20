@@ -1,0 +1,17 @@
+{
+  "_doc": "Every contract copy this repo pins from a producer, and the producer branch it must equal. scripts/harness/pinned_contract_gate.py fails when a copy differs from the producer's develop. Refresh = copy the file, never edit it.",
+  "pins": [
+    {
+      "local": "internal/adapters/inbound/kafka/testdata/fulfillment-execution.asyncapi.yaml",
+      "repo": "IQVO/fulfillment-execution",
+      "path": "apis/asyncapi.yaml",
+      "ref": "develop"
+    },
+    {
+      "local": "internal/adapters/inbound/kafka/testdata/labor-performance.asyncapi.yaml",
+      "repo": "IQVO/labor-performance",
+      "path": "apis/asyncapi.yaml",
+      "ref": "develop"
+    }
+  ]
+}

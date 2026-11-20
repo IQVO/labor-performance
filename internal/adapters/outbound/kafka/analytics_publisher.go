@@ -2,9 +2,10 @@
 // ANALYTICS publisher, which fans this service's own past-tense domain
 // events onto warehouse.labor-performance.analytics, feeding the data
 // product's own projector (ADR-0007); and the INTEGRATION publisher
-// (ADR-0013), which publishes TaskPerformanceRecorded onto
-// warehouse.labor-performance.events, this service's first Published
-// Language for other bounded contexts to consume.
+// (ADR-0013, widened by ADR-0038), which publishes TaskPerformanceRecorded,
+// LaborStandardDefined and LaborStandardRevised onto
+// warehouse.labor-performance.events, this service's Published Language
+// for other bounded contexts to consume.
 //
 // It is strictly ADDITIVE. The OLTP write path is untouched: the domain
 // and application layers still publish through the same
@@ -136,37 +137,12 @@ func (p *AnalyticsPublisher) Publish(ctx context.Context, events ...shared.Domai
 // no request span of its own: injecting now is what lets the projector's
 // consume span still become a child of the originating request.
 func (p *AnalyticsPublisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([]Encoded, error) {
-	out := make([]Encoded, 0, len(events))
-	for _, event := range events {
-		eventType, entity, key, subject, data, ok := marshalData(event)
-		if !ok {
-			continue
-		}
-
-		payload, err := cloudevents.New(cloudevents.Spec{
-			ID:        p.newID(),
-			Entity:    entity,
-			EventName: eventType,
-			Subject:   subject,
-			Time:      event.OccurredAt(),
-			Stream:    cloudevents.StreamAnalytics,
-			Version:   1,
-			Data:      data,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("kafka: encode analytics cloudevent: %w", err)
-		}
-		headers := []kafkago.Header{cloudevents.ContentTypeHeader()}
-		otelkafka.Inject(ctx, &headers)
-		out = append(out, Encoded{
-			Topic:     cloudevents.TopicLaborPerformanceAnalytics,
-			EventType: cloudevents.Type(entity, eventType),
-			Key:       []byte(key),
-			Value:     payload,
-			Headers:   headers,
-		})
-	}
-	return out, nil
+	return encodeStream(ctx, streamEncoding{
+		stream: cloudevents.StreamAnalytics,
+		topic:  cloudevents.TopicLaborPerformanceAnalytics,
+		label:  "analytics",
+		build:  marshalData,
+	}, p.newID, events)
 }
 
 // newID mints a CloudEvent id, returning "" only when no generator
@@ -202,6 +178,7 @@ func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, 
 			fields["travel_component_seconds"] = *ev.TravelComponentSeconds
 		}
 		addStandardHandling(fields, ev.HandlingUnit, ev.TeamLiftThresholdG, ev.TeamLiftExpectedSeconds)
+		addStandardSite(fields, ev.SiteCode)
 		return cloudevents.EventLaborStandardDefined, cloudevents.EntityStandard, string(ev.TaskType), string(ev.StandardId), fields, true
 
 	case shared.LaborStandardRevised:
@@ -216,6 +193,7 @@ func marshalData(e shared.DomainEvent) (eventName, entity, key, subject string, 
 			fields["travel_component_seconds"] = *ev.NewTravelComponentSeconds
 		}
 		addStandardHandling(fields, ev.HandlingUnit, ev.TeamLiftThresholdG, ev.TeamLiftExpectedSeconds)
+		addStandardSite(fields, ev.SiteCode)
 		return cloudevents.EventLaborStandardRevised, cloudevents.EntityStandard, string(ev.TaskType), string(ev.StandardId), fields, true
 
 	case shared.TaskPerformanceRecorded:
