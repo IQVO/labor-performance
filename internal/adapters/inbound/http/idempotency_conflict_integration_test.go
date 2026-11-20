@@ -49,8 +49,9 @@ func (s *staleReadStandards) FindCurrentlyActive(ctx context.Context, tt shared.
 // `UPDATE idempotency_keys` failed and the loser got 500 instead of the
 // mapped 409 standard-conflict. Two requests with DIFFERENT keys race to
 // open the first standard for a task type: exactly one wins (201), the
-// other must get 409 standard-conflict, and its outcome must be recorded
-// so a retry replays the same 409.
+// other must get 409 standard-conflict (not a 500). standard-conflict is
+// RETRYABLE (ADR 0039): its key is released, not recorded, so a retry
+// executes (idempotency_retryable_integration_test.go proves that half).
 func TestIdempotency_UniqueViolationInSharedTx_Returns409NotInternalError(t *testing.T) {
 	pool := idempotencyDB(t)
 
@@ -110,14 +111,9 @@ func TestIdempotency_UniqueViolationInSharedTx_Returns409NotInternalError(t *tes
 		t.Fatalf("labor_standards rows = %d, want exactly 1", got)
 	}
 
-	// The 409 outcome was recorded under the loser's key (the middleware's
-	// UPDATE succeeded), so a retry replays it rather than re-running.
-	var status int
-	if err := pool.QueryRow(context.Background(),
-		"SELECT status_code FROM idempotency_keys WHERE key = $1", loserKey).Scan(&status); err != nil {
-		t.Fatalf("read idempotency row for %s: %v", loserKey, err)
-	}
-	if status != http.StatusConflict {
-		t.Fatalf("recorded status for %s = %d, want 409", loserKey, status)
+	// The 409 is RETRYABLE: nothing was stored under the loser's key, so a
+	// retry runs the request again instead of replaying the refusal.
+	if n := keyRows(t, pool, loserKey); n != 0 {
+		t.Fatalf("key rows for %s = %d, want 0 (a RETRYABLE refusal releases its key)", loserKey, n)
 	}
 }

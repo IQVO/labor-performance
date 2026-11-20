@@ -101,6 +101,10 @@ func TestIdempotency_ConcurrentModificationIsNotStoredAndTheRetryExecutes(t *tes
 	if n := keyRows(t, pool, "key-cm"); n != 0 {
 		t.Fatalf("key rows after a RETRYABLE refusal = %d, want 0: the key must be released", n)
 	}
+	// Nothing committed: the setup standard is still the only row and still open.
+	if got := countStandardRows(t, pool); got != 1 {
+		t.Fatalf("labor_standards rows after the refusal = %d, want 1: a refusal commits nothing", got)
+	}
 
 	retry := postStandard(router, "key-cm", retryBody)
 	if retry.Code != http.StatusCreated || retry.Header().Get(inboundhttp.IdempotencyReplayedHeader) != "" {
