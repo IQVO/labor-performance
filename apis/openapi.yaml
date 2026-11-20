@@ -126,6 +126,15 @@ paths:
         response header `Idempotency-Replayed: true`, instead of defining
         the standard a second time. The same key with a different method,
         path or body is 409 `idempotency-key-reused`.
+
+
+        What is replayed: a 2xx, and a refusal that is final for the request
+        (a validation answer such as 400 `unknown-task-type` or 422
+        `non-positive-expected-seconds`). A refusal that depends on state that
+        can change is NOT stored and its key is released, so the same
+        request under the same key executes again: 409
+        `concurrent-modification` and 409 `standard-conflict`, and every 5xx
+        or panic. A different body under a released key is a new request.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -193,8 +202,10 @@ paths:
             standard after this request's snapshot
             (concurrent-modification), or another standard is already open
             for this task type, handling unit and site (standard-conflict).
-            Re-fetch and retry; never retry an idempotency-key-reused with
-            the same key.
+            concurrent-modification and standard-conflict are not stored:
+            the Idempotency-Key is released, so re-fetch and retry the same
+            request with the same key and it executes again. An
+            idempotency-key-reused is never retried with the same key.
           content:
             application/problem+json:
               schema:
@@ -435,7 +446,11 @@ components:
         /standards: a retry carrying the same key, method, path and an
         identical body replays the original stored response (with the
         response header `Idempotency-Replayed: true`) instead of
-        re-executing the create; the same key with a different method, path
+        re-executing the create, when that response is final for the
+        request (a 2xx, or a validation refusal); a refusal that depends on
+        state that can change (concurrent-modification, standard-conflict)
+        and any 5xx is not stored, so its retry under the same key executes
+        again; the same key with a different method, path
         or body is rejected with 409 idempotency-key-reused, a missing key
         is a 400 idempotency-key-required and a malformed one a 400
         idempotency-key-invalid. Postgres is the only runtime, so the check

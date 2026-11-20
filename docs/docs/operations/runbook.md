@@ -131,7 +131,7 @@ Tables created by the migrations:
 | OLTP | `processed_events` | Consumer idempotency set: CloudEvents ids already applied. |
 | OLTP | `idle_periods` | Derived between-task idle gaps (`capped` flag, [ADR 0014](../adr/0014-labor-utilization-idleness.md)). |
 | OLTP | `outbox_events` | Transactional outbox rows (`published_at`, `attempts`, `last_error`). |
-| OLTP | `idempotency_keys` | Cached `POST /standards` outcomes per `Idempotency-Key` ([ADR 0016](../adr/0016-idempotency-key-middleware.md)). |
+| OLTP | `idempotency_keys` | Cached `POST /standards` outcomes per `Idempotency-Key` ([ADR 0016](../adr/0016-idempotency-key-middleware.md)): a `2xx` and a `FINAL` refusal only. A `RETRYABLE` refusal (`concurrent-modification`, `standard-conflict`) or a `5xx` leaves no row, so a missing row for a key that got a `409` is expected ([ADR 0039](../adr/0039-idempotency-replay-classes.md)). |
 | Analytical | `labor_performance_rollup` | One row per (`task_type`, `hour_bucket`) holding raw counters and sums. Means are computed at read time. |
 | Analytical | `analytics_processed_events` | Ids the projection has applied, with `occurred_at` (drives freshness). |
 | Analytical | `analytics_consumed_events` | Consumer-level dedupe set for the analytics consumer. |

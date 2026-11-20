@@ -79,6 +79,10 @@ relying on a detail not captured here.
     0010/0016; 0024–0030 record mechanisms that already shipped (frontend
     remote, RFC 7807, arch-go, bootretry, HTTPRoute, writer durability,
     MCP evals) — read the one matching the code you touch.
+12. 0039 (idempotency replay classes) before touching the Idempotency-Key
+    middleware or adding a problem type: every entry of the catalogue
+    declares FINAL, OUTCOME or RETRYABLE, a RETRYABLE refusal is not stored,
+    and the ADR's class table is held equal to the catalogue by a test.
 
 ## Proposing a new ADR
 
