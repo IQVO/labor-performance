@@ -518,12 +518,20 @@ components:
       type: string
       minLength: 1
       maxLength: 32
-      pattern: '^\S+$'
+      pattern: '^[^\t\n\v\f\r\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$'
       description: >-
         The facility (facility-layout site code) a standard is scoped to
-        (ADR 0038): 1-32 characters, no whitespace. Absent means the
-        site-less standard that applies to every site. Declarative input:
-        this service never looks a site up in a sibling context.
+        (ADR 0038): 1-32 characters with no Unicode White_Space code point
+        anywhere — exactly what the domain constructor shared.NewSiteCode
+        enforces, so the schema and the constructor cannot drift. The
+        pattern spells the refused set out (U+0009-U+000D, U+0020, U+0085,
+        U+00A0, U+1680, U+2000-U+200A, U+2028, U+2029, U+202F, U+205F,
+        U+3000) because `\S` is engine-dependent: ECMA-262 admits U+0085,
+        Schemathesis's generation admitted U+00A0/U+0085/U+000B, and those
+        schema-valid-but-domain-refused values made the contract job fail
+        at random (CI run 44738035745). Absent means the site-less
+        standard that applies to every site. Declarative input: this
+        service never looks a site up in a sibling context.
       example: SITE-GRU-01
     TeamLiftRequest:
       type: object
