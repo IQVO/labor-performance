@@ -94,7 +94,7 @@ func (r *OutboxRelay) Run(ctx context.Context) error {
 	for {
 		n, err := r.RelayOnce(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			r.logger.ErrorContext(ctx, "outbox relay pass failed", "error", err)
+			r.logger.ErrorContext(ctx, "outbox relay pass failed", "error", sanitizeErr(err))
 		}
 		if n == r.batchSize && err == nil {
 			continue
@@ -241,8 +241,8 @@ func (r *OutboxRelay) logCapReached(ctx context.Context, p pendingOutboxRow, att
 		return
 	}
 	r.logger.ErrorContext(ctx, "outbox relay: row reached the attempt cap and is excluded from future claims; re-arm it with attempts = 0 after fixing the cause",
-		"outbox_id", p.id, "topic", p.msg.Topic, "event_type", p.msg.EventType,
-		"key", string(p.msg.Key), "attempts", attempts, "max_attempts", r.maxAttempts, "error", sendErr)
+		"outbox_id", p.id, "topic", p.msg.Topic, "event_type", sanitizeLog(p.msg.EventType),
+		"key", sanitizeLog(string(p.msg.Key)), "attempts", attempts, "max_attempts", r.maxAttempts, "error", sanitizeErr(sendErr))
 }
 
 // markPublished marks one successfully sent row published.
