@@ -223,7 +223,7 @@ func problemFromUseCase(err error) *problem {
 	case errors.Is(err, shared.ErrUnknownTaskType):
 		return &problem{Type: problemTypeBase + "/unknown-task-type", Title: "Task type must be PICK, PACK, or SLAM", Detail: err.Error(), Status: 400}
 	default:
-		slog.Error("a2a skill failed", "error", err)
+		slog.Error("a2a skill failed", "error", logReplacer.Replace(err.Error()))
 		return &problem{Type: problemTypeBase + "/internal-error", Title: "Unexpected failure executing the skill", Detail: "the skill failed; see server logs (trace id in the response metadata)", Status: 500}
 	}
 }
