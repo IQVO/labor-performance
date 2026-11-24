@@ -247,7 +247,7 @@ func (uc *RecordTaskPerformance) recordIdleGap(ctx context.Context, req RecordTa
 			// the performance write over it.
 			if uc.Logger != nil {
 				uc.Logger.WarnContext(ctx, "skipping idle gap: out-of-order Kafka delivery",
-					"associate_id", string(req.AssociateId), "task_id", req.TaskId, "error", err)
+					"associate_id", sanitizeLog(string(req.AssociateId)), "task_id", sanitizeLog(req.TaskId), "error", sanitizeErr(err))
 			}
 			return nil, nil
 		}
