@@ -57,7 +57,7 @@ sequenceDiagram
     alt invariant violated
         AG-->>UC: ErrNonPositiveExpectedSeconds or travel error
         UC-->>H: error, metrics rejected
-        H-->>MW: 422 problem
+        H-->>MW: 422 problem (FINAL: stored and replayed)
     end
     Note over UC,DB: UnitOfWork.Execute reuses the middleware tx
     opt prior exists
@@ -66,7 +66,7 @@ sequenceDiagram
         alt version moved
             SR-->>UC: ErrConcurrentModification
             UC-->>H: error
-            H-->>MW: 409 concurrent-modification
+            H-->>MW: 409 concurrent-modification (RETRYABLE: rolled back, key released)
         end
     end
     UC->>SR: Save next
@@ -74,8 +74,8 @@ sequenceDiagram
         Note over SR,DB: INSERT runs in a SAVEPOINT, so the 23505 does not abort the middleware tx
         SR-->>UC: ErrOpenStandardConflict
         UC-->>H: error
-        H-->>MW: 409 standard-conflict
-        MW->>DB: UPDATE idempotency_keys with the 409, COMMIT
+        H-->>MW: 409 standard-conflict (RETRYABLE, ADR 0039)
+        MW->>DB: ROLLBACK, key row and writes gone, key released
         MW-->>Client: 409 standard-conflict
     end
     UC->>OB: Publish LaborStandardRevised or LaborStandardDefined

@@ -103,6 +103,8 @@ enforcing one open standard per `task_type`.** Both are migration
    aggregate → `Save` transparently. This mirrors the fleet reference's
    finding that no use-case file needed a code change.
 
+> **Amended by [ADR 0039](./0039-idempotency-replay-classes.md) (2026-11-20).** The Consequences bullet below that says a retry with the same key "gets the cached 409" is superseded: `concurrent-modification` and `standard-conflict` are `RETRYABLE`, so their key is released and the same retry executes again.
+
 ## Consequences
 
 **Positive**

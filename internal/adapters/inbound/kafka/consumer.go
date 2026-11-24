@@ -361,7 +361,7 @@ func recordSpanError(span trace.Span, err error) {
 // output, as the tests rely on.
 func (c *Consumer) log(ctx context.Context, msg string, args ...any) {
 	if c.logger != nil {
-		c.logger.WarnContext(ctx, msg, args...)
+		c.logger.WarnContext(ctx, msg, sanitizeArgs(args)...)
 	}
 }
 

@@ -357,7 +357,7 @@ ruleset (`.spectral.yaml`) that enforces it in the `api-lint` job.
 
 | Method | Path | Use case |
 | --- | --- | --- |
-| `POST` | `/standards` | DefineStandard (optional `travelComponentSeconds`, ADR 0015; optional `handlingUnit`/`teamLift`, ADR 0035; optional `siteCode`, ADR 0038). Requires an `Idempotency-Key` header (1-128 printable ASCII; missing is 400 `idempotency-key-required`, malformed is 400 `idempotency-key-invalid`); a replay answers with `Idempotency-Replayed: true`, the same key with another method, path or body is 409 `idempotency-key-reused`. See ADR 0016 and ADR 0037. |
+| `POST` | `/standards` | DefineStandard (optional `travelComponentSeconds`, ADR 0015; optional `handlingUnit`/`teamLift`, ADR 0035; optional `siteCode`, ADR 0038). Requires an `Idempotency-Key` header (1-128 printable ASCII; missing is 400 `idempotency-key-required`, malformed is 400 `idempotency-key-invalid`); a replay answers with `Idempotency-Replayed: true`, the same key with another method, path or body is 409 `idempotency-key-reused`. A refusal is replayed only when it is final for the request (a validation answer); `concurrent-modification`, `standard-conflict` and every 5xx are not stored, their key is released and the same retry executes again (ADR 0039). See ADR 0016, ADR 0037 and ADR 0039. |
 | `GET` | `/standards/{taskType}` | GetStandard: the site-less standard; `?handlingUnit=` resolves the most specific unit standard (ADR 0035); `?siteCode=` reads exactly that site's standard, 404 when it has none (ADR 0038) |
 | `GET` | `/associates/{associateId}/scorecard` | GetAssociateScorecard |
 | `GET` | `/task-types/{taskType}/performance` | GetTaskTypePerformance |
@@ -431,7 +431,10 @@ curl -s -X POST localhost:8080/standards \
 
 Retrying the identical request with the same `Idempotency-Key` replays the
 first call's cached 201 (byte-identical, plus `Idempotency-Replayed: true`);
-the same key with a different body answers 409 `idempotency-key-reused`.
+the same key with a different body answers 409 `idempotency-key-reused`. A
+refusal that depends on state that can change (409 `concurrent-modification`,
+409 `standard-conflict`) is not stored: retry it with the same key and it runs
+again ([ADR 0039](docs/docs/adr/0039-idempotency-replay-classes.md)).
 Revising the standard closes the prior record and starts a new one, and needs
 a fresh `Idempotency-Key`:
 

@@ -206,7 +206,7 @@ func (c *AnalyticsConsumer) handleWithRetry(ctx context.Context, msg kafkago.Mes
 			return ctx.Err()
 		}
 		c.logger().ErrorContext(ctx, "analytics message handling failed; retrying",
-			"topic", msg.Topic, "offset", msg.Offset, "attempt", attempt, "retry_in", delay, "error", err)
+			"topic", msg.Topic, "offset", msg.Offset, "attempt", attempt, "retry_in", delay, "error", sanitizeErr(err))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -259,7 +259,7 @@ func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error
 	evt, err := cloudevents.Decode(raw)
 	if err != nil {
 		c.logger().WarnContext(ctx, "skipping invalid cloudevent on analytics topic",
-			"topic", cloudevents.TopicLaborPerformanceAnalytics, "error", err)
+			"topic", cloudevents.TopicLaborPerformanceAnalytics, "error", sanitizeErr(err))
 		return nil
 	}
 
@@ -279,7 +279,7 @@ func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error
 	var data analyticsData
 	if err := evt.DataAs(&data); err != nil {
 		c.logger().WarnContext(ctx, "skipping analytics event with undecodable data",
-			"topic", cloudevents.TopicLaborPerformanceAnalytics, "id", evt.ID(), "type", evt.Type(), "error", err)
+			"topic", cloudevents.TopicLaborPerformanceAnalytics, "id", sanitizeLog(evt.ID()), "type", sanitizeLog(evt.Type()), "error", sanitizeErr(err))
 		return nil
 	}
 
