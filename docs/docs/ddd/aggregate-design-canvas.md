@@ -68,11 +68,15 @@ Omitted: `Rehydrate` (a persistence round-trip, not a transition) and the
 ### 5. Corrective Policies
 
 - A conflicting revision (409) is not retried by the server; the caller
-  re-reads with `GET /standards/{taskType}` and resubmits.
+  re-reads with `GET /standards/{taskType}` and resubmits. The 409s
+  (`concurrent-modification`, `standard-conflict`) are RETRYABLE: not stored,
+  their `Idempotency-Key` is released, and the same retry executes again
+  (ADR 0039).
 - A repeated `POST /standards` with the same `Idempotency-Key` and body
   replays the stored response (with `Idempotency-Replayed: true`) instead of
   revising twice; the same key with a different method, path or body is
-  rejected with 409 `idempotency-key-reused` (ADR 0016, ADR 0037).
+  rejected with 409 `idempotency-key-reused` (ADR 0016, ADR 0037). A validation
+  refusal is replayed too; a RETRYABLE refusal is not (ADR 0039).
 
 ### 6. Handled Commands
 

@@ -80,3 +80,49 @@ context owns, not a second set of numbers declared somewhere else. Two things st
 - **A `GET` for planning to call.** Live cross-context calls are banned in both contexts.
 - **Make `site_code` required.** Every existing standard and message would become invalid; the
   site-less standard is a real business fact (one engineered time for every building).
+
+## Addendum (2026-11-20): the SiteCode schema must spell the constructor's rule, not `\S`
+
+The decision above is unchanged — a site code is 1-32 characters with no whitespace, exactly as
+`shared.NewSiteCode` validates it (`internal/domain/shared/shared.go`: rune count over
+`MaxSiteCodeLength` or invalid UTF-8 refused, then any rune for which `unicode.IsSpace` is true
+refused). This addendum records how that rule must be ENCODED in the API specs, and why.
+
+The OpenAPI `SiteCode` schema first spelled "no whitespace" as `pattern: '^\S+$'`. `\S` is not a
+portable way to say "no Unicode White_Space": its meaning depends on the regex engine —
+ECMA-262 (JSON Schema's `pattern` language) excludes U+00A0 but admits U+0085 (NEL); Python's
+`re` excludes both but also excludes U+001C-U+001F, which Go's `White_Space` does not; and
+Schemathesis 4.28's value generation admitted U+000B, U+0085 and U+00A0 outright. The `contract`
+CI job generates requests FROM the schema, so it periodically produced a schema-compliant
+`siteCode` the constructor refused with `400 invalid-site-code`, and failed with
+"API rejected schema-compliant request" — randomly, depending on generation. CI run 44738035745
+(PR #282's first head run, before any production change) failed on
+`GET /standards/PACK?siteCode=%5E%C2%A0%C2%9Aq%3F%12O` — the `%C2%A0` is U+00A0 NO-BREAK SPACE.
+A local probe with the pinned Schemathesis 4.28.0 and CI's exact flags reproduced the flake on
+7 of 10 seeds with `^\S+$` and on 0 of 10 with the fix below.
+
+**The rule:** wherever a spec constrains a value the domain constructs, the spec must encode the
+constructor's validation exactly, and spelling a Unicode property class by its shorthand (`\S`,
+`\w`, `\d`) is not that — the shorthand is engine-dependent. `apis/openapi.yaml`'s `SiteCode`
+pattern now lists the refused code points explicitly (Go's `White_Space` set, which is what
+`unicode.IsSpace` implements):
+
+```
+^[^\t\n\v\f\r\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+$
+(exactly as it appears in `apis/openapi.yaml`; every code point is Go's `White_Space` set)
+
+Anything the constructor accepts that the old pattern refused (U+001C-U+001F, U+FEFF, currency
+symbols, zero-width characters) is now schema-valid too — the schema matches the domain in BOTH
+directions. `internal/adapters/inbound/http/site_code_spec_test.go` pins this: a table of every
+`White_Space` code point (and the exact CI-generated value) must be refused by the pattern, a
+table of constructor-accepted values must be admitted, and minLength/minLength must equal 1 and
+`MaxSiteCodeLength`. The test failed on the pre-fix schema and passes on the fixed one.
+
+**Known remainder, deliberately not fixed here:** `apis/asyncapi.yaml`'s two `site_code` payload
+fields still carry `^\S+$`. The drift there is inert — every published event's `site_code` has
+already passed `NewSiteCode`, so no consumer can ever receive a value the pattern wrongly admits
+— and fixing it is not this repo's alone to do: `scripts/harness/asyncapi_breaking.py` classifies
+any pattern change on an owned payload field as breaking (4 ERR findings on the proposed change,
+verified locally), and warehouse-planning pins `apis/asyncapi.yaml` byte-for-byte
+(`contracts/pinned.json@develop`). It needs either a fleet-blessed drift-correction carve-out in
+the breaking gate or a coordinated pin refresh; the REST fix in this addendum is the template.

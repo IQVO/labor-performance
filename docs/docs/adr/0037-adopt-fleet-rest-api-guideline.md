@@ -19,6 +19,8 @@ cutover: it ships and is deployed together with the other services' cutover
 PRs, because the key header contract and the list envelope are breaking for
 every client.
 
+> **Amended by [ADR 0039](./0039-idempotency-replay-classes.md) (2026-11-20).** The sentence below that says `2xx` and `4xx` answers are stored and replayed, and that the loser of a race replays the winner's answer, no longer holds for every `4xx`: a refusal is stored only when its problem type is `FINAL` or `OUTCOME`; `concurrent-modification` and `standard-conflict` are `RETRYABLE`, not stored, and their key is released.
+
 ## Context
 
 The 2026-10-30 portfolio assessment measured two spellings of the replay

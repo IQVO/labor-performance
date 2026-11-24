@@ -96,6 +96,7 @@ Typos, broken links and formatting are of course fair game.
 | [0036](./0036-a2a-inbound-adapter.md) | A2A inbound adapter: a read-only Agent2Agent agent (`associate_scorecard`, `task_type_status`) over the same read use cases, no write and no outbound client | Accepted |
 | [0037](./0037-adopt-fleet-rest-api-guideline.md) | Adopt the fleet REST API guideline: noun routes, every POST/PATCH idempotent (global key, `409 idempotency-key-reused`, `Idempotency-Replayed`), no collection GET to paginate, Spectral `rest-guideline` ruleset | Accepted |
 | [0038](./0038-labor-standards-on-the-integration-topic-and-site-scope.md) | `LaborStandardDefined`/`LaborStandardRevised` also published on the integration topic (same payload) for warehouse-planning's local copy; optional `site_code` scope on a standard; scoring unchanged | Accepted |
+| [0039](./0039-idempotency-replay-classes.md) | Every problem type has an idempotency replay class (FINAL, OUTCOME, RETRYABLE) declared on its catalogue entry; a RETRYABLE refusal (`concurrent-modification`, `standard-conflict`, a `404` on a fact not known yet) is not stored and its key is released | Accepted |
 
 The Status column repeats each record's own `## Status` section. Four
 records whose bodies say plain **Accepted** have since been partly
