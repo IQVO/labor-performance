@@ -96,8 +96,8 @@ mcp:
     enabled: true
     path: /api/mcp/labor-performance
     parentRefs:
-      - name: warehouse-gateway
-        namespace: kong
+      - name: agent-router
+        namespace: envoy-gateway-system
         sectionName: http
   resources:
     requests:
@@ -108,8 +108,8 @@ a2a:
     enabled: true
     path: /api/a2a/labor-performance
     parentRefs:
-      - name: warehouse-gateway
-        namespace: kong
+      - name: agent-router
+        namespace: envoy-gateway-system
         sectionName: http
   resources:
     requests:
